@@ -120,6 +120,12 @@
             maxlength="8000"
             required
           ></textarea>
+          <div class="composer-options">
+            <label class="online-option"><input type="checkbox" id="online-search" disabled> 联网搜索</label>
+            <span id="online-hint">检查搜索服务…</span>
+            <label class="file-upload-label">上传 CSV<input id="file-upload" type="file" accept=".csv,text/csv" class="sr-only"></label>
+            <span id="file-status" role="status"></span>
+          </div>
           <div class="composer-bottom">
             <span id="status" role="status" aria-live="polite">正在连接…</span>
             <div class="composer-controls">

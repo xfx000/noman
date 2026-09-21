@@ -6,6 +6,10 @@ const state = {
   conversationId: crypto.randomUUID(),
   runs: new Map(),
   configured: false,
+  webSearchEnabled: false,
+  workspaceEnabled: false,
+  historyLoading: false,
+  attachment: null,
 
   pinned: true,
   chats: [],
@@ -23,6 +27,10 @@ const toolNames = {
   validate_sql: "校验 SQL",
   execute_sql: "执行只读查询",
   current_time: "确认当前时间",
+  generate_chart: "生成数据图表",
+  reset_equipped_tools: "发现并加载工具",
+  web_search: "搜索公开资料",
+  analyze_file: "分析上传文件",
 };
 let toastTimer;
 
@@ -347,7 +355,7 @@ function refreshControls() {
   const run = currentRun();
   $("#send").hidden = Boolean(run);
   $("#stop").hidden = !run;
-  $("#send").disabled = !state.configured || !input.value.trim();
+  $("#send").disabled = !state.configured || state.historyLoading || !input.value.trim();
   // Identity changes wait for all requests, so replies cannot cross user stores.
   user.disabled = state.runs.size > 0 || !user.options.length;
   $("#new-chat").disabled = false;
@@ -364,6 +372,40 @@ const historyKey = () =>
 function activeChat() {
   return state.chats.find((chat) => chat.id === state.activeId);
 }
+const historyVersions = new Map();
+const remoteHistories = new Map();
+const historyQueues = new Map();
+async function loadRemoteHistory() {
+  if (!state.workspaceEnabled) return;
+  const username = user.value;
+  state.historyLoading = true;
+  refreshControls();
+  try {
+    const result = await request("/api/history", { headers: { "X-Qiqi-User": username } });
+    if (!result.ok) throw new Error();
+    const saved = await result.json();
+    historyVersions.set(username, saved.revision);
+    if (saved.data && user.value === username) remoteHistories.set(username, saved.data);
+  } catch { toast("服务端历史读取失败，暂时显示本地记录"); }
+  finally { state.historyLoading = false; refreshControls(); }
+}
+function syncHistory() {
+  const username = user.value;
+  if (!state.workspaceEnabled || !historyVersions.has(username) || state.historyLoading) return;
+  const snapshot = JSON.parse(JSON.stringify({ chats: state.chats, activeId: state.activeId }));
+  const queued = (historyQueues.get(username) || Promise.resolve()).then(async () => {
+    if (!historyVersions.has(username)) return;
+    const result = await request("/api/history", { method: "PUT", headers: { "Content-Type": "application/json", "X-Qiqi-User": username },
+      body: JSON.stringify({ revision: historyVersions.get(username), data: snapshot }) });
+    if (!result.ok) {
+      if (result.status === 409) { historyVersions.delete(username); toast("另一个页面更新了会话，请刷新后继续；当前内容已保存在本地"); }
+      else throw new Error();
+      return;
+    }
+    historyVersions.set(username, (await result.json()).revision);
+  }).catch(() => toast("服务端保存失败，当前内容已保存在本地"));
+  historyQueues.set(username, queued);
+}
 function saveHistory() {
   if (!user.value) return;
   try {
@@ -374,9 +416,10 @@ function saveHistory() {
     state.lastSaved = Date.now();
   } catch {
     if (!state.storageWarning)
-      toast("浏览器存储不可用或已满，本次记录暂未保存，请下载报告。");
+      toast(state.workspaceEnabled ? "浏览器缓存不可用，正在尝试服务端保存；也可下载报告" : "浏览器存储不可用或已满，本次记录暂未保存，请下载报告。");
     state.storageWarning = true;
   }
+  syncHistory();
 }
 function renderHistory() {
   const history = $("#history");
@@ -445,7 +488,7 @@ $("#cancel-delete").addEventListener("click", () =>
 );
 $("#confirm-delete").addEventListener("click", () => {
   const id = deletionId;
-  state.runs.get(id)?.controller.abort();
+  stopRun(state.runs.get(id));
   state.chats = state.chats.filter((chat) => chat.id !== id);
   if (state.activeId === id) resetConversation();
   saveHistory();
@@ -457,7 +500,9 @@ function loadHistory() {
   state.chats = [];
   state.activeId = null;
   try {
-    const saved = JSON.parse(localStorage.getItem(historyKey()) || "null");
+    const saved = remoteHistories.has(user.value) ? remoteHistories.get(user.value)
+      : JSON.parse(localStorage.getItem(historyKey()) || "null");
+    remoteHistories.delete(user.value);
     if (Array.isArray(saved?.chats)) {
       state.chats = saved.chats.filter(
         (chat) =>
@@ -469,7 +514,7 @@ function loadHistory() {
         // Refresh during a stream keeps the partial response, but does not reuse
         // a server turn that may still be running.
         if (chat.turns.some((turn) => turn.pending)) {
-          chat.runtimeId = crypto.randomUUID();
+          if (!state.workspaceEnabled) chat.runtimeId = crypto.randomUUID();
           for (const turn of chat.turns.filter((turn) => turn.pending)) {
             turn.pending = false;
             turn.status = "生成已中断 · 已保留部分内容";
@@ -506,7 +551,7 @@ function openConversation(id) {
       messages.append(live.response.card);
       continue;
     }
-    const response = createResponse(turn.query, turn.time);
+    const response = createResponse(turn.query, turn.time, chat.runtimeId);
     response.text = turn.text || "";
     render(response);
     response.progress.classList.remove("busy");
@@ -520,6 +565,10 @@ function openConversation(id) {
     response.trace.hidden = !response.steps.children.length;
     response.summary.textContent = `分析过程 · ${response.steps.children.length} 次工具调用`;
     for (const raw of turn.evidence || []) addEvidence(response, raw);
+    for (const chart of turn.charts || []) addChart(response, chart);
+    for (const message of turn.chartErrors || []) addChartError(response, message);
+    for (const source of turn.webSources || []) addWebSource(response, source);
+    if (turn.diagnostics) showDiagnostics(response, turn.diagnostics);
     response.actions.hidden = !response.text;
   }
   state.pinned = true;
@@ -535,6 +584,8 @@ function resetConversation() {
   messages.replaceChildren();
   input.value = "";
   input.style.height = "";
+  state.attachment = null;
+  $("#file-status").textContent = "";
   $("#welcome").hidden = false;
   $("#jump-latest").hidden = true;
   state.pinned = true;
@@ -558,6 +609,10 @@ function captureResponse(response, force = false) {
       failed: step.classList.contains("failed"),
     })),
     evidence: [...response.results.values()],
+    charts: [...response.charts.values()],
+    chartErrors: [...response.chartErrors],
+    webSources: [...response.webSources.values()],
+    diagnostics: response.diagnostics,
   });
   if (force || Date.now() - state.lastSaved > 1000) saveHistory();
 }
@@ -602,11 +657,18 @@ async function loadMeta() {
         : "模型尚未配置，暂时无法发起分析。请完成本地模型配置后刷新页面。";
     $("#notice").hidden = false;
   }
+  state.webSearchEnabled = Boolean(meta.webSearchEnabled);
+  $("#online-search").disabled = !state.webSearchEnabled;
+  $("#online-hint").textContent = state.webSearchEnabled
+    ? "仅本次提问 · 搜索关键词将发送给 Tavily"
+    : "搜索服务未配置";
   updateScope();
+  state.workspaceEnabled = Boolean(meta.workspaceEnabled);
+  await loadRemoteHistory();
   loadHistory();
   refreshControls();
 }
-function createResponse(query, timestamp = new Date().toISOString()) {
+function createResponse(query, timestamp = new Date().toISOString(), conversationId = state.conversationId) {
   const card = element("article", "message assistant");
   const heading = element("div", "assistant-heading");
   const time = element(
@@ -635,6 +697,15 @@ function createResponse(query, timestamp = new Date().toISOString()) {
   error.hidden = true;
   error.setAttribute("role", "alert");
   const evidence = element("div", "query-evidence");
+  const chartArea = element("div", "chart-results");
+  const sourceArea = element("section", "web-sources");
+  sourceArea.hidden = true;
+  sourceArea.append(element("strong", "", "网络来源"));
+  const diagnosticsArea = element("details", "run-diagnostics");
+  diagnosticsArea.hidden = true;
+  const diagnosticsSummary = element("summary", "", "运行详情");
+  const diagnosticsBody = element("div", "diagnostics-body");
+  diagnosticsArea.append(diagnosticsSummary, diagnosticsBody);
   const actions = element("div", "report-actions");
   actions.hidden = true;
   const response = {
@@ -647,6 +718,18 @@ function createResponse(query, timestamp = new Date().toISOString()) {
     steps,
     actions,
     evidence,
+    chartArea,
+    sourceArea,
+    diagnosticsArea,
+    diagnosticsSummary,
+    diagnosticsBody,
+    diagnostics: null,
+    username: user.value,
+    conversationId,
+    webSources: new Map(),
+    charts: new Map(),
+    chartErrors: new Set(),
+    chartToolText: new Map(),
     query,
     text: "",
     tools: new Map(),
@@ -659,11 +742,15 @@ function createResponse(query, timestamp = new Date().toISOString()) {
     queries: new Set(),
   };
   const copyButton = element("button", "", "复制 Markdown");
-  copyButton.addEventListener("click", () => copy(response.text));
+  copyButton.addEventListener("click", async () => {
+    try { await copy(await portableReport(response)); } catch { toast("图表读取失败，请稍后重试导出"); }
+  });
   const exportButton = element("button", "", "下载报告");
-  exportButton.addEventListener("click", () => {
+  exportButton.addEventListener("click", async () => {
+    let markdown;
+    try { markdown = await portableReport(response); } catch { toast("图表读取失败，请稍后重试导出"); return; }
     const url = URL.createObjectURL(
-      new Blob([response.text], { type: "text/markdown;charset=utf-8" }),
+      new Blob([markdown], { type: "text/markdown;charset=utf-8" }),
     );
     const link = element("a");
     link.href = url;
@@ -672,7 +759,7 @@ function createResponse(query, timestamp = new Date().toISOString()) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   actions.append(copyButton, exportButton);
-  card.append(heading, trace, report, progress, error, evidence, actions);
+  card.append(heading, trace, report, chartArea, progress, error, evidence, sourceArea, diagnosticsArea, actions);
   messages.append(card);
   return response;
 }
@@ -735,7 +822,7 @@ function addEvidence(response, raw) {
     if (typeof result === "string") result = JSON.parse(result);
     if (
       !result.queryId ||
-      !result.executedSql ||
+      (!result.executedSql && !Array.isArray(result.columns)) ||
       response.queries.has(result.queryId)
     )
       return;
@@ -760,15 +847,174 @@ function addEvidence(response, raw) {
     pre.append(element("code", "", result.executedSql));
     block.append(toolbar, pre);
     sql.append(block);
-    details.append(id, sql);
+    if (result.executedSql) details.append(id, sql);
+    else details.append(id, element("p", "", result.source?.operation === "preview" ? "文件预览 · 仅展示前 20 行" : "文件分析结果 · 使用完整文件进行统计"));
+    if (result.source?.type === "csv") details.append(element("p", "", `来源：${result.source.name} · ${result.source.totalRows} 行 · ${result.source.operation}${result.source.valueColumn ? `(${result.source.valueColumn})` : ""}${result.source.groupBy ? ` · 按 ${result.source.groupBy} 分组` : ""}`));
+    if (state.workspaceEnabled) {
+      const download = element("button", "", result.truncated ? "导出预览 CSV（非完整结果）" : "导出 CSV");
+      download.addEventListener("click", () => downloadProtected(`/api/evidence/${encodeURIComponent(result.queryId)}/csv?conversationId=${encodeURIComponent(response.conversationId)}`, response.username, "Qiqi-result.csv"));
+      details.append(download);
+    }
     response.evidence.append(details);
   } catch {
     /* Tool errors and partial JSON do not create evidence. */
   }
 }
+function chartSource(value) {
+  if (typeof value !== "string" || value.length > 2_000_022) return null;
+  if (/^\/api\/charts\/[a-f0-9-]{36}$/.test(value)) return value;
+  if (/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return value;
+  try {
+    const url = new URL(value);
+    if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password)
+      return url.href;
+  } catch { /* Invalid chart sources never become links or images. */ }
+  return null;
+}
+function addChart(response, chart) {
+  const source = chartSource(chart?.source);
+  if (!source || typeof chart.id !== "string" || typeof chart.queryId !== "string"
+      || typeof chart.title !== "string" || response.charts.has(chart.id)) return;
+  const safe = { id: chart.id, queryId: chart.queryId, title: chart.title, type: chart.type, source };
+  response.charts.set(safe.id, safe);
+  const figure = element("figure", "chart-card");
+  const caption = element("figcaption", "chart-caption");
+  caption.append(element("strong", "", safe.title));
+  const link = element("a", "chart-download", source.startsWith("data:") ? "下载 PNG" : "打开原图");
+  link.href = source;
+  link.rel = "noopener noreferrer";
+  if (source.startsWith("data:")) link.download = "Qiqi-chart.png";
+  else link.target = "_blank";
+  caption.append(link);
+  const image = element("img", "chart-image");
+  image.alt = safe.title;
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
+  const failure = element("p", "chart-error", "图片加载失败，原图链接可能已过期，请重新生成图表。");
+  failure.hidden = true;
+  image.addEventListener("error", () => { image.hidden = true; failure.hidden = false; });
+  if (source.startsWith("/api/charts/")) {
+    link.textContent = "下载 PNG";
+    link.href = "#";
+    link.removeAttribute("target");
+    link.addEventListener("click", event => { event.preventDefault(); downloadProtected(source, response.username, "Qiqi-chart.png"); });
+    request(source, { headers: { "X-Qiqi-User": response.username } }).then(async result => {
+      if (!result.ok) throw new Error();
+      const url = URL.createObjectURL(await result.blob());
+      image.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+      image.src = url;
+    }).catch(() => { image.hidden = true; failure.hidden = false; });
+  } else image.src = source;
+  figure.append(caption, image, failure, element("p", "chart-evidence", `查询证据 · ${safe.queryId}`));
+  response.chartArea.append(figure);
+}
+function addChartError(response, message) {
+  if (!message || response.chartErrors.has(message)) return;
+  response.chartErrors.add(message);
+  const error = element("p", "chart-error", message);
+  error.setAttribute("role", "status");
+  response.chartArea.append(error);
+}
+async function downloadProtected(url, username, filename) {
+  try {
+    const result = await request(url, { headers: { "X-Qiqi-User": username } });
+    if (!result.ok) throw new Error();
+    const objectUrl = URL.createObjectURL(await result.blob());
+    const link = element("a"); link.href = objectUrl; link.download = filename; link.click();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch { toast("下载失败，请检查当前身份与服务状态"); }
+}
+async function stopRun(run) {
+  if (!run) return;
+  const id = run.response.diagnostics?.runId;
+  if (state.workspaceEnabled && id) {
+    try { await request(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: { "X-Qiqi-User": run.response.username } }); }
+    catch { /* Disconnect still cancels the server subscription. */ }
+  }
+  run.controller.abort();
+}
+function addWebSource(response, source) {
+  if (!source || typeof source.url !== "string" || source.url.length > 2048) return;
+  const url = chartSource(source.url);
+  if (!url || !/^https?:/.test(url) || response.webSources.has(url)) return;
+  const safe = { title: String(source.title || url).slice(0, 200), url };
+  response.webSources.set(url, safe);
+  response.sourceArea.hidden = false;
+  const link = element("a", "", safe.title);
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  response.sourceArea.append(link);
+}
+function showDiagnostics(response, run) {
+  if (!run || typeof run.runId !== "string" || !/^[a-f0-9-]{36}$/.test(run.runId)) return;
+  response.diagnostics = run;
+  response.diagnosticsArea.hidden = false;
+  const labels = { RUNNING: "进行中", SUCCEEDED: "完成", PARTIAL: "完成 · 含工具失败", FAILED: "失败", CANCELLED: "已取消", INCOMPLETE: "未完成" };
+  const duration = Math.max(0, Number(run.durationMs) || 0);
+  response.diagnosticsSummary.textContent = `运行详情 · ${labels[run.status] || "未知状态"} · ${(duration / 1000).toFixed(1)} 秒`;
+  const id = element("p", "run-id", `运行编号：${run.runId}`);
+  response.diagnosticsBody.replaceChildren(id);
+  if (run.errorCode) response.diagnosticsBody.append(element("p", "", `故障代码：${run.errorCode}`));
+  if (run.usage) response.diagnosticsBody.append(element("p", "", `Token：输入 ${run.usage.inputTokens} / 输出 ${run.usage.outputTokens} / 缓存 ${run.usage.cachedTokens}`));
+  else response.diagnosticsBody.append(element("p", "", "Token：模型未返回用量"));
+  const operations = element("ul");
+  for (const op of (run.operations || []).slice(0, 250)) {
+    const name = op.kind === "model" ? "模型调用" : toolNames[op.name] || op.name;
+    const line = element("li", op.status === "FAILED" ? "failed" : "",
+      `${name} · ${labels[op.status] || op.status} · ${(Math.max(0, Number(op.durationMs) || 0) / 1000).toFixed(2)} 秒${op.errorCode ? ` · ${op.errorCode}` : ""}`);
+    operations.append(line);
+  }
+  response.diagnosticsBody.append(operations);
+  const refresh = element("button", "", "刷新运行状态");
+  refresh.type = "button";
+  refresh.addEventListener("click", async () => {
+    refresh.disabled = true;
+    try {
+      const result = await request(`/api/runs/${encodeURIComponent(run.runId)}`, { headers: { "X-Qiqi-User": response.username } });
+      if (!result.ok) throw new Error("运行记录不可用或已过期");
+      showDiagnostics(response, await result.json());
+      captureResponse(response, true);
+    } catch { toast("运行记录不可用或已过期"); }
+    finally { refresh.disabled = false; }
+  });
+  response.diagnosticsBody.append(refresh);
+}
+async function portableReport(response) {
+  let markdown = reportMarkdown(response);
+  for (const chart of response.charts.values()) {
+    if (!chart.source.startsWith("/api/charts/")) continue;
+    const result = await request(chart.source, { headers: { "X-Qiqi-User": response.username } });
+    if (!result.ok) throw new Error();
+    const blob = await result.blob();
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(blob);
+    });
+    markdown = markdown.replaceAll(chart.source, data);
+  }
+  return markdown;
+}
+function reportMarkdown(response) {
+  return response.text + [...response.charts.values()].map(chart =>
+    `\n\n![${chart.title.replace(/[\[\]\r\n]/g, " ")}](${chart.source.replace(/\(/g, "%28").replace(/\)/g, "%29")})\n\n查询证据：${chart.queryId}`,
+  ).join("") + (response.webSources.size ? "\n\n网络来源：\n" + [...response.webSources.values()].map(source =>
+    `- [${source.title.replace(/[\[\]\r\n]/g, " ")}](${source.url.replace(/\(/g, "%28").replace(/\)/g, "%29")})`).join("\n") : "");
+}
 function handleEvent(event, response) {
   const data = event.data || {};
   switch (event.type) {
+    case "RUN_START":
+      showDiagnostics(response, data.run);
+      break;
+    case "RUN_END":
+      showDiagnostics(response, data.run);
+      response.done = true;
+      if (["FAILED", "INCOMPLETE", "CANCELLED"].includes(data.run?.status)) {
+        response.failed = true;
+        response.error.hidden = false;
+        if (!response.error.textContent) response.error.textContent = `本次运行未完成（${data.run.errorCode || data.run.status}），请查看运行详情。`;
+      }
+      break;
     case "TEXT_BLOCK_DELTA":
       if (
         response.replyId &&
@@ -802,13 +1048,23 @@ function handleEvent(event, response) {
       break;
     }
     case "TOOL_RESULT_TEXT_DELTA":
-      if (data.toolCallName === "execute_sql")
+      if (data.toolCallName === "generate_chart")
+        response.chartToolText.set(data.toolCallId,
+          (response.chartToolText.get(data.toolCallId) || "") + (data.delta || ""));
+      if (["execute_sql", "analyze_file"].includes(data.toolCallName))
         response.results.set(
           data.toolCallId,
           (response.results.get(data.toolCallId) || "") + (data.delta || ""),
         );
       break;
     case "TOOL_RESULT_END": {
+      if (data.toolCallName === "web_search" && data.state === "success")
+        for (const source of data.metadata?.webSearch?.sources || []) addWebSource(response, source);
+      if (data.toolCallName === "generate_chart") {
+        if (data.state === "error") addChartError(response,
+          response.chartToolText.get(data.toolCallId) || "图表生成失败，已有查询结果仍可使用。");
+        else if (data.metadata?.chart) addChart(response, data.metadata.chart);
+      }
       const step = response.tools.get(data.toolCallId);
       if (step) {
         const failed = data.state === "error";
@@ -864,7 +1120,12 @@ async function consumeStream(body, response) {
   }
 }
 async function send(query) {
-  if (currentRun() || !state.configured || !query.trim()) return;
+  if (currentRun() || !state.configured || state.historyLoading || !query.trim()) return;
+  if (state.attachment?.conversationId === state.conversationId) {
+    query += `\n\n已上传 CSV：${state.attachment.name}；fileId=${state.attachment.fileId}。请先用 analyze_file 预览，统计使用完整文件。`;
+    state.attachment = null;
+    $("#file-status").textContent = "";
+  }
   state.pinned = true;
   const controller = new AbortController();
   let chat = activeChat();
@@ -895,7 +1156,7 @@ async function send(query) {
   refreshControls();
   $("#welcome").hidden = true;
   messages.append(element("article", "message user", query));
-  const response = createResponse(query, turn.time);
+  const response = createResponse(query, turn.time, chat.runtimeId);
   response.savedTurn = turn;
   state.runs.set(chat.id, { controller, response });
   chat.draft = "";
@@ -906,6 +1167,8 @@ async function send(query) {
   $("#status").textContent = "正在分析…";
   follow();
   let stopped = false;
+  const online = state.webSearchEnabled && $("#online-search").checked;
+  $("#online-search").checked = false;
   try {
     const result = await request("/api/chat/stream", {
       method: "POST",
@@ -913,7 +1176,7 @@ async function send(query) {
         "Content-Type": "application/json",
         "X-Qiqi-User": user.value,
       },
-      body: JSON.stringify({ query, conversationId: chat.runtimeId }),
+      body: JSON.stringify({ query, conversationId: chat.runtimeId, online }),
       signal: controller.signal,
     });
     if (!result.ok) {
@@ -951,13 +1214,13 @@ async function send(query) {
     state.runs.delete(chat.id);
     if (response.failed || stopped) {
       // A cancelled server turn may still be unwinding. Use a fresh state slot.
-      chat.runtimeId = crypto.randomUUID();
+      if (!state.workspaceEnabled) chat.runtimeId = crypto.randomUUID();
       if (state.activeId === chat.id) state.conversationId = chat.runtimeId;
-      response.progress.textContent += " · 下次提问将开启新会话";
-      const retry = element("button", "", "重新提问");
+      response.progress.textContent += state.workspaceEnabled ? " · 可从已保存上下文继续" : " · 下次提问将开启新会话";
+      const retry = element("button", "", state.workspaceEnabled ? "继续完成" : "重新提问");
       retry.addEventListener("click", () => {
         if (currentRun()) return;
-        input.value = query;
+        input.value = state.workspaceEnabled ? `继续完成这个问题：${query}。先核对已完成的证据，再处理剩余部分。` : query;
         resizeInput();
         refreshControls();
         input.focus();
@@ -997,13 +1260,14 @@ $("#composer").addEventListener("submit", (event) => {
   event.preventDefault();
   send(input.value.trim());
 });
-$("#stop").addEventListener("click", () => currentRun()?.controller.abort());
+$("#stop").addEventListener("click", () => stopRun(currentRun()));
 $("#new-chat").addEventListener("click", () => {
   if (!$("#settings-page").hidden) closeSettings();
   resetConversation();
 });
-user.addEventListener("change", () => {
+user.addEventListener("change", async () => {
   updateScope();
+  if (state.workspaceEnabled) await loadRemoteHistory();
   loadHistory();
   toast("已切换身份和对话记录");
 });
@@ -1015,6 +1279,27 @@ document.querySelectorAll(".suggestion").forEach((button) =>
     input.focus();
   }),
 );
+$("#file-upload").addEventListener("change", async event => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  if (!state.workspaceEnabled || !/\.csv$/i.test(file.name) || file.size > 2 * 1024 * 1024) {
+    toast("请上传不超过 2 MB 的 UTF-8 CSV 文件"); return;
+  }
+  const conversationId = state.conversationId, username = user.value;
+  $("#file-status").textContent = "正在读取文件…";
+  try {
+    const result = await request("/api/files", { method: "POST", headers: { "Content-Type": "application/json", "X-Qiqi-User": username },
+      body: JSON.stringify({ name: file.name, content: await file.text(), conversationId }) });
+    if (!result.ok) { const error = await result.json(); throw new Error(error.error || "文件上传失败"); }
+    const data = await result.json();
+    if (state.conversationId !== conversationId || user.value !== username) return;
+    state.attachment = { ...data, conversationId };
+    $("#file-status").textContent = `${data.name} · ${data.totalRows} 行 · ${data.columns.join("、")}`;
+    input.value ||= "请分析这个文件，先介绍数据，再按合适的维度汇总。";
+    resizeInput(); refreshControls();
+  } catch (error) { $("#file-status").textContent = error.message || "文件上传失败"; }
+});
 loadMeta().catch(() => {
   $("#notice").textContent = "无法连接服务，请确认服务已启动后刷新页面。";
   $("#notice").hidden = false;

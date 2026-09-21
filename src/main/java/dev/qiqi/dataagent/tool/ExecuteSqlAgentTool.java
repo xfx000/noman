@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.qiqi.dataagent.identity.IdentityService;
 import dev.qiqi.dataagent.identity.UserIdentity;
 import dev.qiqi.dataagent.query.ReadOnlyQueryService;
+import dev.qiqi.dataagent.chart.ChartQueryStore;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
@@ -34,11 +35,13 @@ public class ExecuteSqlAgentTool implements AgentTool {
     private final IdentityService identities;
     private final ReadOnlyQueryService queries;
     private final ObjectMapper mapper;
+    private final ChartQueryStore chartQueries;
 
-    public ExecuteSqlAgentTool(IdentityService identities, ReadOnlyQueryService queries, ObjectMapper mapper) {
+    public ExecuteSqlAgentTool(IdentityService identities, ReadOnlyQueryService queries, ObjectMapper mapper, ChartQueryStore chartQueries) {
         this.identities = identities;
         this.queries = queries;
         this.mapper = mapper;
+        this.chartQueries = chartQueries;
     }
 
     @Override public String getName() { return "execute_sql"; }
@@ -69,7 +72,10 @@ public class ExecuteSqlAgentTool implements AgentTool {
         // 从这里往下进入 Qiqi 自己的业务层：SQL 校验、范围注入、只读执行和审计。
         Object rawSql = param.getInput().get("sql");
         if (!(rawSql instanceof String sql) || sql.isBlank()) throw new IllegalArgumentException("sql is required");
-        var result = queries.execute(sql, identity, context.getSessionId());
+        var cancellation = context.get(dev.qiqi.dataagent.agent.RunCancellation.class);
+        var result = queries.execute(sql, identity, context.getSessionId(),
+                cancellation == null ? new dev.qiqi.dataagent.agent.RunCancellation() : cancellation);
+        chartQueries.remember(context.getUserId(), context.getSessionId(), result);
         return ToolResultBlock.text(mapper.writeValueAsString(result));
     }
 }

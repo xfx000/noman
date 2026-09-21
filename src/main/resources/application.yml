@@ -1,4 +1,6 @@
 spring:
+  codec:
+    max-in-memory-size: 6MB
   application:
     name: qiqi-data-agent
   datasource:
@@ -14,6 +16,16 @@ server:
   port: 8080
 
 qiqi:
+  storage:
+    directory: ${QIQI_STORAGE_DIR:.qiqi}
+  web-search:
+    enabled: ${QIQI_WEB_SEARCH_ENABLED:false}
+    api-key: ${TAVILY_API_KEY:}
+    timeout: 15s
+  chart:
+    enabled: ${QIQI_CHART_ENABLED:false}
+    mcp-url: ${QIQI_CHART_MCP_URL:http://localhost:3033/mcp}
+    timeout: 30s
   model:
     provider: ${QIQI_MODEL_PROVIDER:dashscope}
     base-url: ${QIQI_MODEL_BASE_URL:}

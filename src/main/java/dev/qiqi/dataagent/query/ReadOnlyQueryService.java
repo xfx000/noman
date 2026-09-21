@@ -29,6 +29,11 @@ public class ReadOnlyQueryService {
     }
 
     public QueryResult execute(String sql, UserIdentity identity, String conversationId) {
+        return execute(sql, identity, conversationId, new dev.qiqi.dataagent.agent.RunCancellation());
+    }
+
+    public QueryResult execute(String sql, UserIdentity identity, String conversationId, dev.qiqi.dataagent.agent.RunCancellation cancellation) {
+        cancellation.check();
         SqlValidation validation = sqlPolicy.validate(sql);
         if (!validation.valid()) throw new IllegalArgumentException(validation.reason());
         String scopedSql = dataScopeGuard.apply(validation.safeSql(), identity);
@@ -40,6 +45,8 @@ public class ReadOnlyQueryService {
                 try {
                     connection.setReadOnly(true);
                     try (var statement = connection.prepareStatement(scopedSql)) {
+                        cancellation.onCancel(() -> { try { statement.cancel(); } catch (java.sql.SQLException ignored) { } });
+                        cancellation.check();
                         statement.setQueryTimeout(Math.toIntExact(Math.max(1, properties.query().timeout().toSeconds())));
                         statement.setMaxRows(properties.query().maxRows() + 1);
                         try (var rs = statement.executeQuery()) {
@@ -47,7 +54,7 @@ public class ReadOnlyQueryService {
                             List<String> columns = new ArrayList<>();
                             for (int i = 1; i <= meta.getColumnCount(); i++) columns.add(meta.getColumnLabel(i));
                             List<Map<String, Object>> rows = new ArrayList<>();
-                            while (rs.next() && rows.size() <= properties.query().maxRows()) {
+                            while (!cancellation.cancelled() && rs.next() && rows.size() <= properties.query().maxRows()) {
                                 Map<String, Object> row = new LinkedHashMap<>();
                                 for (int i = 1; i <= columns.size(); i++) row.put(columns.get(i - 1), rs.getObject(i));
                                 rows.add(row);
@@ -61,6 +68,7 @@ public class ReadOnlyQueryService {
                     connection.setReadOnly(previousReadOnly);
                 }
             });
+            cancellation.check();
             long durationMs = (System.nanoTime() - started) / 1_000_000;
             jdbc.update("""
                     INSERT INTO query_audit(query_id, user_id, conversation_id, sql_text, success, duration_ms)

@@ -10,7 +10,7 @@ const events = (list) =>
     )
     .join("");
 const ev = (type, data = {}) => ({ type, data });
-async function setup(handler, stored = {}) {
+async function setup(handler, stored = {}, meta = {}) {
   const dom = new JSDOM(readFileSync(root + "index.html", "utf8"), {
     runScripts: "outside-only",
     pretendToBeVisual: true,
@@ -35,6 +35,7 @@ async function setup(handler, stored = {}) {
           ok: true,
           json: async () => ({
             modelConfigured: true,
+            ...meta,
             demoUsers: [
               { username: "admin", displayName: "Admin", dataScope: "ALL" },
               {
@@ -45,7 +46,7 @@ async function setup(handler, stored = {}) {
             ],
           }),
         }
-      : handler(options);
+      : handler(options, url);
   for (const f of ["vendor/marked.umd.js", "vendor/purify.min.js", "app.js"])
     w.eval(
       readFileSync(root + f, "utf8") +
@@ -67,6 +68,125 @@ function streamed(text) {
   );
 }
 (async () => {
+  let attachmentRequest;
+  const fileUpload = await setup((options, url) => {
+    if (url === "/api/history") return { ok: true, json: async () => ({ revision: options.method === "PUT" ? JSON.parse(options.body).revision + 1 : 0, data: null }) };
+    if (url === "/api/files") {
+      const data = JSON.parse(options.body);
+      assert.equal(options.headers["X-Qiqi-User"], "admin");
+      assert.equal(data.name, "sample.csv");
+      return { ok: true, json: async () => ({ fileId: "test-file", name: data.name, totalRows: 2, columns: ["area", "amount"] }) };
+    }
+    attachmentRequest = JSON.parse(options.body);
+    return streamed(events([ev("TEXT_BLOCK_DELTA", { replyId: "file", delta: "文件已分析" }), ev("AGENT_END")]));
+  }, {}, { workspaceEnabled: true });
+  const fileInput = fileUpload.document.querySelector("#file-upload");
+  Object.defineProperty(fileInput, "files", { value: [{ name: "sample.csv", size: 40, text: async () => "area,amount\nA,1\nB,2" }] });
+  fileInput.dispatchEvent(new fileUpload.Event("change"));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(fileUpload.document.querySelector("#file-status").textContent, /2 行/);
+  await fileUpload.send("汇总文件");
+  assert.match(attachmentRequest.query, /fileId=test-file/);
+  assert.equal(fileUpload.document.querySelector("#file-status").textContent, "");
+  fileUpload.close();
+  console.log("PASS CSV attachment upload, preview metadata and scoped analysis request");
+  let serverHistory = { revision: 2, data: { chats: [{ id: "server-chat", runtimeId: "server-session", title: "服务端对话", updatedAt: 1,
+    turns: [{ query: "old", text: "服务端保存的回答", status: "分析完成", steps: [], evidence: [] }] }], activeId: "server-chat" } };
+  let savedRequests = 0;
+  const persistent = await setup((options, url) => {
+    if (url === "/api/history") {
+      if (options.method === "PUT") {
+        const input = JSON.parse(options.body);
+        assert.equal(input.revision, serverHistory.revision);
+        serverHistory = { revision: input.revision + 1, data: input.data };
+        savedRequests++;
+      }
+      return { ok: true, json: async () => JSON.parse(JSON.stringify(serverHistory)) };
+    }
+    return streamed(events([ev("TEXT_BLOCK_DELTA", { replyId: "persist", delta: "继续的回答" }), ev("AGENT_END")]));
+  }, {}, { workspaceEnabled: true });
+  assert.match(persistent.document.querySelector(".report").textContent, /服务端保存/);
+  await persistent.send("continue");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(savedRequests > 0);
+  assert.equal(serverHistory.data.chats[0].runtimeId, "server-session");
+  assert.equal(serverHistory.data.chats[0].turns[1].text, "继续的回答");
+  persistent.close();
+  console.log("PASS server history restore, serialized versioned saves and stable conversation id");
+  const sampleRun = { runId: "12345678-1234-1234-1234-123456789abc", status: "PARTIAL", durationMs: 2100,
+    usage: { inputTokens: 42, outputTokens: 8, cachedTokens: 3 },
+    operations: [{ id: "search", kind: "tool", name: "web_search", status: "FAILED", durationMs: 120, errorCode: "WEB_TIMEOUT" }] };
+  const requests = [];
+  const research = await setup((options) => {
+    requests.push(JSON.parse(options.body));
+    return streamed(events([
+      ev("RUN_START", { run: { ...sampleRun, status: "RUNNING" } }),
+      ev("TOOL_RESULT_END", { toolCallName: "web_search", state: "success", metadata: { webSearch: { sources: [
+        { title: "Public <script>bad</script>", url: "https://example.com/report" },
+        { title: "Unsafe", url: "javascript:alert(1)" }, { title: "Unsafe PNG", url: "data:image/png;base64,AAAA" },
+      ] } } }),
+      ev("TEXT_BLOCK_DELTA", { delta: "公开资料供参考。", replyId: "a" }), ev("AGENT_END"), ev("RUN_END", { run: sampleRun }),
+    ]));
+  }, {}, { webSearchEnabled: true });
+  research.document.querySelector("#online-search").checked = true;
+  await research.send("查询行业背景");
+  assert.equal(requests[0].online, true);
+  assert.equal(research.document.querySelector("#online-search").checked, false);
+  assert.equal(research.document.querySelectorAll(".web-sources a").length, 1);
+  assert.equal(research.document.querySelector(".web-sources script"), null);
+  assert.match(research.document.querySelector(".run-diagnostics").textContent, /WEB_TIMEOUT/);
+  assert.match(research.document.querySelector(".run-diagnostics").textContent, /输入 42/);
+  const researchHistory = research.localStorage.getItem("qiqi.conversations.v1.admin");
+  research.close();
+  const restoredResearch = await setup(() => streamed(events([])), { "qiqi.conversations.v1.admin": researchHistory });
+  assert.equal(restoredResearch.document.querySelectorAll(".web-sources a").length, 1);
+  assert.match(restoredResearch.document.querySelector(".run-diagnostics").textContent, /含工具失败/);
+  assert.equal(restoredResearch.document.querySelector("#online-search").disabled, true);
+  restoredResearch.close();
+  const exhausted = await setup(() => streamed(events([ev("AGENT_END"), ev("RUN_END", { run: { ...sampleRun, status: "INCOMPLETE", errorCode: "MAX_ITERATIONS" } })])));
+  await exhausted.send("complex");
+  assert.match(exhausted.document.querySelector(".response-error").textContent, /MAX_ITERATIONS/);
+  exhausted.close();
+  console.log("PASS per-turn online opt-in, source safety, diagnostics, usage, history and incomplete runs");
+  const chart = { id: "chart-1", queryId: "query-1", title: "收入 <script>bad</script>", type: "bar", source: "https://storage.example/chart.png" };
+  const chartEvents = [
+    ev("TOOL_CALL_START", { toolCallId: "chart-call", toolCallName: "generate_chart" }),
+    ev("TOOL_RESULT_END", { toolCallId: "chart-call", toolCallName: "generate_chart", state: "success", metadata: { chart } }),
+    ev("TOOL_RESULT_END", { toolCallId: "chart-call", toolCallName: "generate_chart", state: "success", metadata: { chart } }),
+    ev("TEXT_BLOCK_DELTA", { replyId: "chart", delta: "已生成图表。" }), ev("AGENT_END"),
+  ];
+  const charts = await setup(() => streamed(events(chartEvents)));
+  await charts.send("画收入图");
+  assert.equal(charts.document.querySelectorAll(".chart-card").length, 1);
+  assert.equal(charts.document.querySelector(".chart-image").alt, chart.title);
+  assert.equal(charts.document.querySelector(".chart-card script"), null);
+  assert.match(charts.document.querySelector(".chart-evidence").textContent, /query-1/);
+  const history = charts.localStorage.getItem("qiqi.conversations.v1.admin");
+  charts.close();
+  const replay = await setup(() => streamed(events([])), { "qiqi.conversations.v1.admin": history });
+  assert.equal(replay.document.querySelectorAll(".chart-card").length, 1);
+  replay.document.querySelector(".chart-image").dispatchEvent(new replay.Event("error"));
+  assert.equal(replay.document.querySelector(".chart-error").hidden, false);
+  replay.close();
+  for (const source of ["javascript:alert(1)", "data:image/svg+xml,<svg onload=alert(1)>", "https://user:pass@example.com/x"]) {
+    const unsafe = await setup(() => streamed(events([
+      ev("TOOL_RESULT_END", { toolCallName: "generate_chart", state: "success", metadata: { chart: { ...chart, source } } }), ev("AGENT_END"),
+    ])));
+    await unsafe.send("检查图表来源");
+    assert.equal(unsafe.document.querySelectorAll(".chart-card").length, 0);
+    unsafe.close();
+  }
+  const outage = await setup(() => streamed(events([
+    ev("TOOL_RESULT_TEXT_DELTA", { toolCallName: "generate_chart", toolCallId: "bad", delta: "图表服务超时" }),
+    ev("TOOL_RESULT_END", { toolCallName: "generate_chart", toolCallId: "bad", state: "error" }),
+    ev("TEXT_BLOCK_DELTA", { replyId: "fallback", delta: "查询仍然成功。" }), ev("AGENT_END"),
+  ])));
+  await outage.send("画图");
+  assert.match(outage.document.querySelector(".chart-error").textContent, /超时/);
+  assert.match(outage.document.querySelector(".report").textContent, /查询仍然成功/);
+  assert.equal(outage.document.querySelectorAll(".chart-card").length, 0);
+  outage.close();
+  console.log("PASS chart artifacts, duplicate events, history replay, image failures, unsafe sources and MCP outage fallback");
   const typingText = "逐字呈现中文与 emoji 🌿，保持完整。".repeat(10);
   const typing = await setup(() =>
     streamed(
