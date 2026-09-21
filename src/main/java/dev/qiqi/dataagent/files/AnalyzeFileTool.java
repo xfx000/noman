@@ -37,7 +37,10 @@ public class AnalyzeFileTool implements AgentTool {
             var table = files.require(ctx.getUserId(), ctx.getSessionId(), text(input, "fileId"));
             var result = files.analyze(table, text(input, "operation"), text(input, "valueColumn"), text(input, "groupBy"));
             evidence.remember(ctx.getUserId(), ctx.getSessionId(), result);
-            return ToolResultBlock.text(json.writeValueAsString(result));
+            var summary = json.valueToTree(result);
+            ((com.fasterxml.jackson.databind.node.ObjectNode) summary).remove("rows");
+            return ToolResultBlock.of(io.agentscope.core.message.TextBlock.builder().text(json.writeValueAsString(result)).build(),
+                    Map.of("evidence", summary));
         }).subscribeOn(Schedulers.boundedElastic()).onErrorResume(error -> Mono.just(ToolResultBlock.error(
                 error instanceof IllegalArgumentException || error instanceof SecurityException ? error.getMessage() : "文件分析失败，请检查文件后重试。")));
     }

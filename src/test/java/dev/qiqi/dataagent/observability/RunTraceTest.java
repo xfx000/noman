@@ -45,4 +45,18 @@ class RunTraceTest {
         for (int i = 0; i < 200; i++) store.start(1, "s", false).complete();
         assertThatThrownBy(() -> store.require(first.id(), 1)).hasMessageContaining("404");
     }
+    @Test void unfinishedPlanAndFrameworkErrorCannotBeReportedAsSuccess() {
+        var trace = new RunTrace(1, "s", false);
+        trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "todo", "toolCallName", "todoWrite", "state", "success",
+                "metadata", Map.of("todos", java.util.List.of(Map.of("content", "待核对", "status", "in_progress"))))));
+        trace.accept(new StreamEvent("AGENT_END", Map.of())); trace.complete();
+        assertThat(trace.snapshot().status()).isEqualTo("INCOMPLETE");
+        assertThat(trace.snapshot().errorCode()).isEqualTo("PLAN_INCOMPLETE");
+        var failed = new RunTrace(1, "s", false);
+        failed.accept(new StreamEvent("ERROR", Map.of("message", "private provider error")));
+        failed.accept(new StreamEvent("AGENT_END", Map.of())); failed.complete();
+        assertThat(failed.snapshot().status()).isEqualTo("FAILED");
+        assertThat(failed.snapshot().errorCode()).isEqualTo("AGENT_FAILED");
+        assertThat(failed.execution().snapshot().toString()).doesNotContain("private provider error");
+    }
 }

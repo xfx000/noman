@@ -42,8 +42,19 @@ public class RunTraceStore {
         if (trace == null || trace.owner() != owner) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Run not found or expired");
         return trace.snapshot();
     }
+    public synchronized ExecutionJournal.Snapshot execution(String id, long owner) {
+        require(id, owner);
+        RunTrace live = traces.get(id);
+        if (live != null) return live.execution().snapshot();
+        var saved = workspace.read(Long.toString(owner), "executions", id, ExecutionJournal.Snapshot.class)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "This older run has no execution record"));
+        return saved.status().equals("RUNNING") ? ExecutionJournal.interrupted(saved) : saved;
+    }
     public synchronized void persist(RunTrace trace) {
-        if (workspace != null) workspace.write(Long.toString(trace.owner()), "runs", trace.id(), trace.snapshot());
+        if (workspace != null) {
+            workspace.write(Long.toString(trace.owner()), "executions", trace.id(), trace.execution().snapshot());
+            workspace.write(Long.toString(trace.owner()), "runs", trace.id(), trace.snapshot());
+        }
     }
     private void purge() {
         Instant cutoff = Instant.now().minus(Duration.ofHours(1));

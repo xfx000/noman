@@ -52,7 +52,7 @@
 第 3 项可以用 YAML 保存，但“指标口径”本身包括业务定义、过滤条件、金额/日期字段、表关联与边界测试。
 建议从收入、订单数、客单价三个指标开始，文件进 Git；如果没有口径校验和查询约束，仅增加 YAML 不会自动让 SQL 正确。
 
-第 4 项当前仍无 Skills 注册。ReActAgent 2.0.3 本身支持 SkillRepository 与按需加载，无需为了 Skills 切换 Harness。
+第 4 项已在后续执行体验增强中接入原生 ClasspathSkillRepository 和 data-analysis Skill，并补齐 Todo 与持久化执行时间线。详见 [六项验收记录](execution-enhancements.md)。无需为了 Skills 切换 Harness。
 
 ### HarnessAgent 工作量估计
 

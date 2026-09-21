@@ -27,6 +27,16 @@ public class DataAgentFactory {
     private static final String BASE_PROMPT = """
             You are Qiqi DataAgent, an evidence-first business data analyst.
 
+            Workflow:
+            Before investigating business data, load the data-analysis skill through load_skill_through_path,
+            using the advertised skillId and path SKILL.md. This is separate from tool group discovery.
+            For multi-step analysis (comparisons, trends, charts, file aggregation or reports), first call todoWrite
+            with a short actionable plan, before schema exploration. Keep at most one task in_progress; update
+            each step when verified. Keep failed/unresolved steps unfinished and explain the limitation.
+            Simple questions do not need a plan. Give brief user-facing progress summaries of actions and findings.
+            Final reports should directly answer the question with key figures, definitions, exact date intervals,
+            queryId evidence, successful charts, limitations and justified next steps. Avoid empty boilerplate.
+
             Rules:
             1. Inspect actual tables and columns before writing SQL. Never invent a table, column, row, or number.
             2. For relative dates, call current_time and inspect the available data range. State the exact interval used.
@@ -48,6 +58,7 @@ public class DataAgentFactory {
 
     private final QiqiProperties properties;
     private final DataAgentToolkit toolkits;
+    private final AnalysisSkills skills;
 
     // Agent 每次请求重新创建，但状态仓库必须共享，才能用 userId + sessionId 恢复多轮上下文。
     private final AgentStateStore stateStore;
@@ -55,9 +66,10 @@ public class DataAgentFactory {
     // Model 实现由 AgentScope 提供，可以被多个按请求创建的 Agent 复用。
     private final Model model;
 
-    public DataAgentFactory(QiqiProperties properties, DataAgentToolkit toolkits, LocalWorkspace workspace) {
+    public DataAgentFactory(QiqiProperties properties, DataAgentToolkit toolkits, LocalWorkspace workspace, AnalysisSkills skills) {
         this.properties = properties;
         this.toolkits = toolkits;
+        this.skills = skills;
         this.stateStore = new JsonFileAgentStateStore(workspace.stateDirectory());
 
         // 没有密钥时不构造模型，让应用和安全测试仍然能够启动；真正聊天时再返回明确错误。
@@ -84,6 +96,11 @@ public class DataAgentFactory {
     public ReActAgent create(UserIdentity identity, boolean online) {
         if (model == null) throw new IllegalStateException("Model API key is not configured (QIQI_MODEL_API_KEY or DASHSCOPE_API_KEY)");
 
+        return create(identity, online, model);
+    }
+
+    // Shared assembly path also allows deterministic runtime regression tests without a provider call.
+    ReActAgent create(UserIdentity identity, boolean online, Model selectedModel) {
         Toolkit toolkit = toolkits.create(online);
 
         // 身份说明可以帮助模型解释结果，但真正的授权仍在 ExecuteSqlAgentTool 中执行。
@@ -101,9 +118,11 @@ public class DataAgentFactory {
         return ReActAgent.builder()
                 .name("qiqi-data-agent")
                 .sysPrompt(BASE_PROMPT + identityContext)
-                .model(model)
+                .model(selectedModel)
                 .toolkit(toolkit)
                 .enableMetaTool(true)
+                .skillRepository(skills.repository())
+                .skillCodeExecutionEnabled(false)
                 .maxIters(properties.model().maxIterations())
                 .stateStore(stateStore)
                 .build();

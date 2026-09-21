@@ -2314,3 +2314,17 @@ input:focus-visible {
 
 .file-upload-label { cursor: pointer; color: var(--accent); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
 #file-status { overflow-wrap: anywhere; max-width: 100%; }
+
+/* Execution details share the existing report palette and remain text-only. */
+.todo-panel { margin: 12px 0 18px; padding: 14px 16px; border: 1px solid var(--border, #e5e8e2); border-radius: 10px; background: var(--surface, #fafbf8); font-size: 13px; }
+.todo-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.todo-item { display: flex; align-items: baseline; gap: 10px; color: #696d66; }
+.todo-state { flex: 0 0 44px; font-size: 11px; color: #83877f; }
+.todo-item.in_progress .todo-state { color: #476a46; font-weight: 600; }
+.todo-item.completed .todo-state { color: #66885b; }
+.todo-item.interrupted .todo-state { color: #a76b42; }
+.tool-trace .tool-step { padding: 4px 0; }
+.tool-detail > summary { padding: 4px 0; color: #5f685b; font-size: 12px; }
+.tool-detail .tool-payload-label { margin: 10px 0 3px; font-size: 11px; color: #72796d; }
+.tool-detail .tool-payload { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; background: #f1f3ef; color: #475043; border-radius: 6px; padding: 10px; margin: 0 4px 8px 0; }
+.tool-step.failed > .tool-detail > summary { color: #a36345; }

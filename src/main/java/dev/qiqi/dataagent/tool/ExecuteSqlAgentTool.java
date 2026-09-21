@@ -76,6 +76,9 @@ public class ExecuteSqlAgentTool implements AgentTool {
         var result = queries.execute(sql, identity, context.getSessionId(),
                 cancellation == null ? new dev.qiqi.dataagent.agent.RunCancellation() : cancellation);
         chartQueries.remember(context.getUserId(), context.getSessionId(), result);
-        return ToolResultBlock.text(mapper.writeValueAsString(result));
+        var summary = mapper.valueToTree(result);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) summary).remove("rows");
+        return ToolResultBlock.of(io.agentscope.core.message.TextBlock.builder().text(mapper.writeValueAsString(result)).build(),
+                Map.of("evidence", summary));
     }
 }

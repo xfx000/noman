@@ -8,6 +8,7 @@ const state = {
   configured: false,
   webSearchEnabled: false,
   workspaceEnabled: false,
+  executionEnabled: false,
   historyLoading: false,
   attachment: null,
 
@@ -22,6 +23,8 @@ const input = $("#query");
 const user = $("#user");
 const scrollArea = $("#scroll-area");
 const toolNames = {
+  todoWrite: "更新分析计划",
+  load_skill_through_path: "加载分析规范",
   list_tables: "查看业务数据表",
   describe_table: "读取表结构",
   validate_sql: "校验 SQL",
@@ -517,6 +520,7 @@ function loadHistory() {
           if (!state.workspaceEnabled) chat.runtimeId = crypto.randomUUID();
           for (const turn of chat.turns.filter((turn) => turn.pending)) {
             turn.pending = false;
+            turn.recoverExecution = true;
             turn.status = "生成已中断 · 已保留部分内容";
           }
         }
@@ -558,7 +562,8 @@ function openConversation(id) {
     response.progress.textContent = turn.status || "分析完成";
     response.error.textContent = turn.error || "";
     response.error.hidden = !turn.error;
-    for (const step of turn.steps || [])
+    response.savedTurn = turn;
+    if (!turn.execution) for (const step of turn.steps || [])
       response.steps.append(
         element("li", step.failed ? "failed" : "", step.text),
       );
@@ -569,6 +574,10 @@ function openConversation(id) {
     for (const message of turn.chartErrors || []) addChartError(response, message);
     for (const source of turn.webSources || []) addWebSource(response, source);
     if (turn.diagnostics) showDiagnostics(response, turn.diagnostics);
+    if (turn.execution) applyExecution(response, turn.execution, true);
+    if (state.executionEnabled && turn.diagnostics?.runId && (turn.recoverExecution || turn.diagnostics.status === "RUNNING"))
+      recoverExecution(response);
+
     response.actions.hidden = !response.text;
   }
   state.pinned = true;
@@ -604,7 +613,7 @@ function captureResponse(response, force = false) {
     text: response.text,
     status: response.progress.textContent,
     error: response.error.hidden ? "" : response.error.textContent,
-    steps: [...response.steps.children].map((step) => ({
+    steps: response.execution ? [] : [...response.steps.children].map((step) => ({
       text: step.textContent,
       failed: step.classList.contains("failed"),
     })),
@@ -613,8 +622,9 @@ function captureResponse(response, force = false) {
     chartErrors: [...response.chartErrors],
     webSources: [...response.webSources.values()],
     diagnostics: response.diagnostics,
+    execution: response.execution ? { ...response.execution, text: "" } : null,
   });
-  if (force || Date.now() - state.lastSaved > 1000) saveHistory();
+  if (response.username === user.value && (force || Date.now() - state.lastSaved > 1000)) saveHistory();
 }
 window.addEventListener("pagehide", () => {
   for (const run of state.runs.values()) captureResponse(run.response);
@@ -664,6 +674,7 @@ async function loadMeta() {
     : "搜索服务未配置";
   updateScope();
   state.workspaceEnabled = Boolean(meta.workspaceEnabled);
+  state.executionEnabled = Boolean(meta.executionEnabled);
   await loadRemoteHistory();
   loadHistory();
   refreshControls();
@@ -688,9 +699,13 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
   );
   const trace = element("details", "tool-trace");
   trace.hidden = true;
+  trace.open = true;
   const summary = element("summary", "", "分析过程");
   const steps = element("ol");
   trace.append(summary, steps);
+  const todoArea = element("section", "todo-panel");
+  todoArea.hidden = true;
+  todoArea.setAttribute("aria-label", "分析计划");
   const report = element("div", "report");
   const progress = element("div", "response-status busy", "正在理解你的问题…");
   const error = element("div", "response-error");
@@ -716,6 +731,9 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     trace,
     summary,
     steps,
+    todoArea,
+    execution: null,
+    toolDetails: new Map(),
     actions,
     evidence,
     chartArea,
@@ -738,6 +756,7 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     renderTimer: null,
     visibleLength: 0,
     done: false,
+    runEnded: false,
     failed: false,
     queries: new Set(),
   };
@@ -759,7 +778,7 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   actions.append(copyButton, exportButton);
-  card.append(heading, trace, report, chartArea, progress, error, evidence, sourceArea, diagnosticsArea, actions);
+  card.append(heading, todoArea, trace, report, chartArea, progress, error, evidence, sourceArea, diagnosticsArea, actions);
   messages.append(card);
   return response;
 }
@@ -840,9 +859,9 @@ function addEvidence(response, raw) {
     // Render SQL as text nodes so neither SQL nor gateway data can inject markup.
     const block = element("div", "code-block");
     const toolbar = element("div", "code-toolbar");
-    const button = element("button", "", "复制 SQL");
+    const button = element("button", "", result.displayRedacted ? "复制脱敏 SQL" : "复制 SQL");
     button.addEventListener("click", () => copy(result.executedSql));
-    toolbar.append(element("span", "", "实际执行 SQL"), button);
+    toolbar.append(element("span", "", result.displayRedacted ? "执行 SQL · 敏感值已隐藏" : "实际执行 SQL"), button);
     const pre = element("pre");
     pre.append(element("code", "", result.executedSql));
     block.append(toolbar, pre);
@@ -974,6 +993,7 @@ function showDiagnostics(response, run) {
       const result = await request(`/api/runs/${encodeURIComponent(run.runId)}`, { headers: { "X-Qiqi-User": response.username } });
       if (!result.ok) throw new Error("运行记录不可用或已过期");
       showDiagnostics(response, await result.json());
+      if (state.executionEnabled) await recoverExecution(response);
       captureResponse(response, true);
     } catch { toast("运行记录不可用或已过期"); }
     finally { refresh.disabled = false; }
@@ -1000,19 +1020,119 @@ function reportMarkdown(response) {
   ).join("") + (response.webSources.size ? "\n\n网络来源：\n" + [...response.webSources.values()].map(source =>
     `- [${source.title.replace(/[\[\]\r\n]/g, " ")}](${source.url.replace(/\(/g, "%28").replace(/\)/g, "%29")})`).join("\n") : "");
 }
+const executionLabels = { QUEUED: "准备参数", RUNNING: "执行中", SUCCEEDED: "完成", FAILED: "未成功", CANCELLED: "已停止", INCOMPLETE: "未完成" };
+function applyExecution(response, execution, restore = false) {
+  if (!execution || execution.version !== 1 || execution.conversationId !== response.conversationId
+      || !Array.isArray(execution.tools) || !Array.isArray(execution.todos)
+      || (response.diagnostics?.runId && response.diagnostics.runId !== execution.runId)) return;
+  if (response.execution?.runId === execution.runId && response.execution.revision > execution.revision) return;
+  response.execution = execution;
+  response.trace.hidden = !execution.tools.length;
+  const ids = new Set(execution.tools.map(tool => tool.id));
+  for (const [id, view] of response.toolDetails) if (!ids.has(id)) {
+    view.item.remove(); response.toolDetails.delete(id); response.tools.delete(id);
+  }
+  for (const tool of execution.tools.slice(0, 128)) {
+    if (typeof tool.id !== "string") continue;
+    let view = response.toolDetails.get(tool.id);
+    if (!view) {
+      const item = element("li", "tool-step");
+      const details = element("details", "tool-detail");
+      const title = element("summary");
+      const input = element("pre", "tool-payload");
+      const output = element("pre", "tool-payload");
+      const inputLabel = element("div", "tool-payload-label", "调用参数 · 已脱敏");
+      const outputLabel = element("div", "tool-payload-label", "返回结果 · 摘要");
+      details.append(title, inputLabel, input, outputLabel, output);
+      item.append(details); response.steps.append(item);
+      view = { item, title, input, output };
+      response.toolDetails.set(tool.id, view); response.tools.set(tool.id, item);
+    }
+    const duration = (Math.max(0, Number(tool.durationMs) || 0) / 1000).toFixed(2);
+    view.title.textContent = `${toolNames[tool.name] || tool.name} · ${executionLabels[tool.status] || tool.status} · ${duration} 秒`;
+    view.item.classList.toggle("failed", ["FAILED", "INCOMPLETE", "CANCELLED"].includes(tool.status));
+    view.item.dataset.status = tool.status;
+    view.input.textContent = tool.arguments || (["QUEUED", "RUNNING"].includes(tool.status) ? "正在接收参数…" : "无参数");
+    view.output.textContent = tool.result || (["QUEUED", "RUNNING"].includes(tool.status) ? "等待工具返回…" : "未返回文本");
+  }
+  response.summary.textContent = `分析过程 · ${execution.tools.length} 次工具调用${execution.truncated ? " · 部分记录已省略" : ""}`;
+  response.todoArea.hidden = !execution.todos.length;
+  const completed = execution.todos.filter(todo => todo.status === "completed").length;
+  const title = element("strong", "", `分析计划 · ${completed}/${execution.todos.length}`);
+  const list = element("ol", "todo-list");
+  for (const todo of execution.todos.slice(0, 20)) {
+    const interrupted = todo.status === "in_progress" && execution.status !== "RUNNING";
+    const label = todo.status === "completed" ? "已完成" : interrupted ? "未完成" : todo.status === "in_progress" ? "进行中" : "待处理";
+    const row = element("li", `todo-item ${interrupted ? "interrupted" : todo.status}`);
+    row.append(element("span", "todo-state", label), element("span", "", todo.content));
+    list.append(row);
+  }
+  response.todoArea.replaceChildren(title, list);
+  for (const evidence of execution.evidence || []) {
+    const raw = JSON.stringify(evidence);
+    response.results.set(evidence.queryId, raw); addEvidence(response, raw);
+  }
+  for (const chart of execution.charts || []) addChart(response, chart);
+  for (const source of execution.sources || []) addWebSource(response, source);
+  if (execution.status === "RUNNING") response.progress.textContent = execution.progress || "正在分析…";
+  else response.progress.classList.remove("busy");
+  if (restore) {
+    // Never re-run a model to restore a page: the server journal is authoritative.
+    response.text = execution.text || response.text; render(response);
+    response.progress.textContent = execution.progress;
+    response.actions.hidden = !response.text;
+    if (["FAILED", "INCOMPLETE"].includes(execution.status)) {
+      response.error.hidden = false;
+      response.error.textContent = execution.errorCode === "MAX_ITERATIONS"
+        ? "已达到分析轮数上限，可继续完成剩余计划。" : `运行未完成（${execution.errorCode || execution.status}），已恢复保存的进度。`;
+    }
+  }
+  captureResponse(response);
+}
+async function recoverExecution(response) {
+  const id = response.diagnostics?.runId;
+  if (!id) return;
+  try {
+    const result = await request(`/api/runs/${encodeURIComponent(id)}/execution`, { headers: { "X-Qiqi-User": response.username } });
+    if (!result.ok) return; // Older runs legitimately have no journal.
+    const snapshot = await result.json();
+    applyExecution(response, snapshot, true);
+    if (response.diagnostics && snapshot.status !== "RUNNING")
+      showDiagnostics(response, { ...response.diagnostics, status: snapshot.status, errorCode: snapshot.errorCode });
+    if (snapshot.status === "RUNNING" && response.card.isConnected && response.username === user.value) {
+      clearTimeout(response.recoveryTimer);
+      response.recoveryTimer = setTimeout(() => {
+        if (response.card.isConnected && response.username === user.value) recoverExecution(response);
+      }, 1500);
+    }
+    if (response.savedTurn) response.savedTurn.recoverExecution = false;
+    captureResponse(response, true);
+  } catch { /* Keep the last local snapshot available while offline. */ }
+}
 function handleEvent(event, response) {
   const data = event.data || {};
   switch (event.type) {
+    case "EXECUTION_UPDATE":
+      applyExecution(response, data.execution);
+      break;
+    case "EXCEED_MAX_ITERS":
+      response.failed = true;
+      response.error.hidden = false;
+      response.error.textContent = `已达到分析轮数上限（${data.maxIters || "配置值"}），已保留计划与证据，可继续完成剩余任务。`;
+      break;
     case "RUN_START":
       showDiagnostics(response, data.run);
       break;
     case "RUN_END":
+      response.runEnded = true;
       showDiagnostics(response, data.run);
       response.done = true;
       if (["FAILED", "INCOMPLETE", "CANCELLED"].includes(data.run?.status)) {
         response.failed = true;
         response.error.hidden = false;
-        if (!response.error.textContent) response.error.textContent = `本次运行未完成（${data.run.errorCode || data.run.status}），请查看运行详情。`;
+        if (!response.error.textContent) response.error.textContent = data.run.errorCode === "PLAN_INCOMPLETE"
+          ? "分析计划仍有未完成项目，已保留进度，可继续完成。"
+          : `本次运行未完成（${data.run.errorCode || data.run.status}），请查看运行详情。`;
       }
       break;
     case "TEXT_BLOCK_DELTA":
@@ -1189,7 +1309,7 @@ async function send(query) {
       throw new Error(detail || `请求失败（${result.status}），请稍后重试。`);
     }
     await consumeStream(result.body, response);
-    if (!response.done && !response.failed)
+    if ((!response.done || (response.diagnostics && !response.runEnded)) && !response.failed)
       throw new Error("连接已中断，回答可能不完整。请重新提问。");
   } catch (error) {
     if (error.name === "AbortError") stopped = true;
@@ -1229,6 +1349,15 @@ async function send(query) {
       response.actions.hidden = false;
     }
     turn.pending = false;
+    if (response.execution?.status === "RUNNING") {
+      applyExecution(response, { ...response.execution, revision: response.execution.revision + 1,
+        status: stopped ? "CANCELLED" : "INCOMPLETE",
+        progress: stopped ? "分析已停止，已保留进度" : "连接已中断，已保留进度",
+        tools: response.execution.tools.map(tool => ["QUEUED", "RUNNING"].includes(tool.status)
+          ? { ...tool, status: stopped ? "CANCELLED" : "INCOMPLETE", result: "连接中断，完整状态可从服务端恢复" } : tool) });
+      // A client-side interruption is provisional; server revision stays authoritative on refresh.
+      response.execution.revision--;
+    }
     captureResponse(response, true);
     if (state.activeId !== chat.id) chat.unread = true;
     saveHistory();

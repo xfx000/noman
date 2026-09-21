@@ -41,6 +41,11 @@ class ApplicationSmokeTest {
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.status").isEqualTo("FAILED");
         client.get().uri("/api/runs/" + trace.id()).header("X-Qiqi-User", "alice")
                 .exchange().expectStatus().isNotFound();
+        client.get().uri("/api/runs/" + trace.id() + "/execution").header("X-Qiqi-User", "admin")
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.version").isEqualTo(1)
+                .jsonPath("$.status").isEqualTo("FAILED");
+        client.get().uri("/api/runs/" + trace.id() + "/execution").header("X-Qiqi-User", "alice")
+                .exchange().expectStatus().isNotFound();
     }
 
     @Test void streamFailureHasRunIdAndSafeErrorCode() {

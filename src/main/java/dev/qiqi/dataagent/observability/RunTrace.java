@@ -24,19 +24,24 @@ public final class RunTrace {
     private String errorCode;
     private Long durationMs;
     private boolean agentEnded;
+    private final ExecutionJournal execution;
     private boolean hasUsage;
     private long inputTokens, outputTokens, cachedTokens;
 
     RunTrace(long owner, String conversationId, boolean online) {
         this.owner = owner; this.conversationId = conversationId; this.online = online;
+        this.execution = new ExecutionJournal(id, conversationId);
     }
     public String id() { return id; }
+    public ExecutionJournal execution() { return execution; }
     public long owner() { return owner; }
     public Instant startedAt() { return startedAt; }
     public synchronized boolean running() { return status.equals("RUNNING"); }
 
     public synchronized void accept(StreamEvent event) {
         if (!running()) return;
+        execution.accept(event);
+        if (event.type().equals("ERROR")) { fail("AGENT_FAILED"); return; }
         Map<String, Object> data = event.data();
         String type = event.type();
         if (type.equals("AGENT_END")) agentEnded = true;
@@ -80,11 +85,14 @@ public final class RunTrace {
         if (errorCode != null) finish(errorCode.equals("STOP_REQUESTED") ? "CANCELLED" : "INCOMPLETE");
         else if (!agentEnded || operations.values().stream().anyMatch(op -> op.durationMs == null)) {
             errorCode = "STREAM_INCOMPLETE"; finish("INCOMPLETE");
+        } else if (execution.hasUnfinishedPlan()) {
+            errorCode = "PLAN_INCOMPLETE"; finish("INCOMPLETE");
         } else finish(operations.values().stream().anyMatch(op -> op.status.equals("FAILED")) ? "PARTIAL" : "SUCCEEDED");
     }
     private void finish(String terminal) {
         if (!running()) return;
         status = terminal; durationMs = elapsed(startNanos);
+        execution.finish(terminal, errorCode);
         operations.values().stream().filter(op -> op.durationMs == null).forEach(op -> {
             op.status = terminal.equals("CANCELLED") ? "CANCELLED" : "INCOMPLETE";
             op.errorCode = errorCode; op.durationMs = elapsed(op.started);

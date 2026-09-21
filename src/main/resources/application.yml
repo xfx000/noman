@@ -31,7 +31,8 @@ qiqi:
     base-url: ${QIQI_MODEL_BASE_URL:}
     api-key: ${QIQI_MODEL_API_KEY:${DASHSCOPE_API_KEY:}}
     name: ${QIQI_MODEL:qwen-plus}
-    max-iterations: 24
+    max-iterations: ${QIQI_MAX_ITERATIONS:40}
+    run-timeout: ${QIQI_RUN_TIMEOUT:10m}
   query:
     max-rows: 200
     timeout: 10s

@@ -68,6 +68,66 @@ function streamed(text) {
   );
 }
 (async () => {
+  let journal;
+  const timeline = await setup((options) => {
+    const body = JSON.parse(options.body);
+    journal = { version: 1, runId: "99999999-1234-1234-1234-123456789abc", conversationId: body.conversationId,
+      revision: 5, status: "SUCCEEDED", progress: "分析完成", text: "已有真实查询证据", tools: [
+        { id: "plan", name: "todoWrite", status: "SUCCEEDED", arguments: '{"todos":[]}', result: "计划已更新", durationMs: 5 },
+        { id: "sql", name: "execute_sql", status: "SUCCEEDED", arguments: '{"sql":"SELECT COUNT(*) FROM sales_order"}',
+          result: '<img src=x onerror=alert(1)> queryId=q1', durationMs: 30 },
+        { id: "bad", name: "web_search", status: "FAILED", arguments: '{"query":"public"}', result: "WEB_TIMEOUT", durationMs: 100 }
+      ], todos: [{ id: "t1", content: "核对订单", status: "completed" }, { id: "t2", content: "核对外部资料", status: "pending" }],
+      evidence: [{ queryId: "q1", executedSql: "SELECT COUNT(*) FROM sales_order", rowCount: 1, durationMs: 30 }], charts: [], sources: [] };
+    return streamed(events([
+      ev("RUN_START", { run: { runId: journal.runId, status: "RUNNING" } }),
+      ev("EXECUTION_UPDATE", { execution: { ...journal, status: "RUNNING", revision: 2,
+        todos: [{ id: "t1", content: "核对订单", status: "in_progress" }] } }),
+      ev("TEXT_BLOCK_DELTA", { replyId: "final", delta: journal.text }),
+      ev("EXECUTION_UPDATE", { execution: journal }),
+      ev("EXECUTION_UPDATE", { execution: journal }),
+      ev("EXECUTION_UPDATE", { execution: { ...journal, revision: 1, tools: [] } }),
+      ev("RUN_END", { run: { runId: journal.runId, status: "SUCCEEDED" } })
+    ]));
+  });
+  await timeline.send("分析订单和外部资料");
+  const timelineDocument = timeline.document;
+  assert.equal(timelineDocument.querySelectorAll(".tool-step").length, 3);
+  assert.match(timelineDocument.querySelector(".todo-panel").textContent, /1\/2/);
+  assert.match(timelineDocument.querySelectorAll(".tool-payload")[2].textContent, /SELECT COUNT/);
+  assert.equal(timelineDocument.querySelectorAll(".tool-detail img").length, 0);
+  assert.match(timelineDocument.querySelector(".tool-step.failed").textContent, /WEB_TIMEOUT/);
+  assert.equal(timelineDocument.querySelectorAll(".evidence-item").length, 1);
+  const timelineSaved = timeline.localStorage.getItem("qiqi.conversations.v1.admin");
+  timeline.close();
+  const timelineRestored = await setup(() => { throw new Error("Restore must not call model"); },
+    { "qiqi.conversations.v1.admin": timelineSaved });
+  assert.equal(timelineRestored.document.querySelectorAll(".tool-step").length, 3);
+  assert.match(timelineRestored.document.querySelector(".todo-panel").textContent, /核对订单/);
+  assert.match(timelineRestored.document.querySelector(".report").textContent, /已有真实查询证据/);
+  timelineRestored.close();
+  const interruptedHistory = JSON.parse(timelineSaved);
+  interruptedHistory.chats[0].turns[0].pending = true;
+  interruptedHistory.chats[0].turns[0].execution = { ...journal, status: "RUNNING", revision: 6 };
+  interruptedHistory.chats[0].turns[0].diagnostics.status = "RUNNING";
+  let recoveredRequests = 0;
+  const recovery = await setup((options, url) => {
+    if (url === "/api/history") return { ok: true, json: async () => ({ revision: 0, data: null }) };
+    if (url.endsWith("/execution")) {
+      recoveredRequests++;
+      assert.equal(options.headers["X-Qiqi-User"], "admin");
+      return { ok: true, json: async () => ({ ...journal, revision: 7, status: "INCOMPLETE", errorCode: "SERVER_RESTART",
+        progress: "服务重启，已恢复进度", todos: [{ id: "t", content: "核对订单", status: "in_progress" }],
+        tools: [{ id: "sql", name: "execute_sql", status: "INCOMPLETE", arguments: "{}", result: "中断", durationMs: 30 }] }) };
+    }
+    throw new Error("Unexpected request: " + url);
+  }, { "qiqi.conversations.v1.admin": JSON.stringify(interruptedHistory) }, { executionEnabled: true, workspaceEnabled: true });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(recoveredRequests, 1);
+  assert.match(recovery.document.querySelector(".todo-panel").textContent, /未完成/);
+  assert.match(recovery.document.querySelector(".response-status").textContent, /服务重启/);
+  recovery.close();
+  console.log("PASS normalized tool details, duplicate/old events, Todo, safe output, durable replay and server recovery");
   let attachmentRequest;
   const fileUpload = await setup((options, url) => {
     if (url === "/api/history") return { ok: true, json: async () => ({ revision: options.method === "PUT" ? JSON.parse(options.body).revision + 1 : 0, data: null }) };

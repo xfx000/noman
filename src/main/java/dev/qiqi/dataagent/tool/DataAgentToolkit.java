@@ -22,6 +22,7 @@ public class DataAgentToolkit {
         toolkit.registerTool(catalog);
         toolkit.registerTool(sql);
         toolkit.registerAgentTool(execute);
+        toolkit.registerAgentTool(new TodoWriteAgentTool());
         toolkit.createToolGroup("files", "Preview uploaded CSV files and compute exact aggregates over all rows using a fileId.", false);
         toolkit.registration().agentTool(files).group("files").apply();
         if (charts.enabled()) {
