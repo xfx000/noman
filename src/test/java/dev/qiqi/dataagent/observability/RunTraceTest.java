@@ -45,6 +45,37 @@ class RunTraceTest {
         for (int i = 0; i < 200; i++) store.start(1, "s", false).complete();
         assertThatThrownBy(() -> store.require(first.id(), 1)).hasMessageContaining("404");
     }
+    @Test void leftoverInProgressTodoIsCompletedWhenFinalReportExists() {
+        var trace = new RunTrace(1, "s", false);
+        trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "todo", "toolCallName", "todoWrite", "state", "success",
+                "metadata", Map.of("todos", java.util.List.of(
+                        Map.of("content", "核对订单", "status", "completed"),
+                        Map.of("content", "输出最终报告", "status", "in_progress"))))));
+        trace.accept(new StreamEvent("TEXT_BLOCK_DELTA", Map.of("replyId", "final", "delta", "核心结论：2 月收入较 1 月增长。")));
+        trace.accept(new StreamEvent("AGENT_END", Map.of()));
+        trace.complete();
+        assertThat(trace.snapshot().status()).isEqualTo("SUCCEEDED");
+        assertThat(trace.snapshot().errorCode()).isNull();
+        assertThat(trace.execution().snapshot().todos()).allSatisfy(todo ->
+                assertThat(todo.path("status").asText()).isEqualTo("completed"));
+        assertThat(trace.execution().snapshot().progress()).isEqualTo("分析完成");
+    }
+
+    @Test void leftoverPendingTodoStillMarksPlanIncompleteEvenIfReportExists() {
+        var trace = new RunTrace(1, "s", false);
+        trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "todo", "toolCallName", "todoWrite", "state", "success",
+                "metadata", Map.of("todos", java.util.List.of(
+                        Map.of("content", "核对订单", "status", "in_progress"),
+                        Map.of("content", "输出最终报告", "status", "pending"))))));
+        trace.accept(new StreamEvent("TEXT_BLOCK_DELTA", Map.of("replyId", "final", "delta", "核心结论：数据不足。")));
+        trace.accept(new StreamEvent("AGENT_END", Map.of()));
+        trace.complete();
+        assertThat(trace.snapshot().status()).isEqualTo("INCOMPLETE");
+        assertThat(trace.snapshot().errorCode()).isEqualTo("PLAN_INCOMPLETE");
+        assertThat(trace.execution().snapshot().todos().getFirst().path("status").asText()).isEqualTo("in_progress");
+        assertThat(trace.execution().snapshot().todos().getLast().path("status").asText()).isEqualTo("pending");
+    }
+
     @Test void unfinishedPlanAndFrameworkErrorCannotBeReportedAsSuccess() {
         var trace = new RunTrace(1, "s", false);
         trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "todo", "toolCallName", "todoWrite", "state", "success",

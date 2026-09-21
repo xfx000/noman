@@ -1,6 +1,7 @@
 package dev.qiqi.dataagent.observability;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.qiqi.dataagent.web.StreamEvent;
 import java.util.*;
 
@@ -120,6 +121,20 @@ public final class ExecutionJournal {
     }
     public synchronized boolean hasUnfinishedPlan() {
         return todos.stream().anyMatch(todo -> !todo.path("status").asText().equals("completed"));
+    }
+    /** The model often writes the final report without a last todoWrite; do not treat that missed checkbox as incomplete. */
+    public synchronized void completeInProgressIfReported() {
+        if (text.isBlank() || finalNarrationId == null || todos.isEmpty()) return;
+        if (todos.stream().anyMatch(todo -> "pending".equals(todo.path("status").asText()))) return;
+        todos = todos.stream().map(todo -> {
+            if (!"in_progress".equals(todo.path("status").asText())) return todo;
+            JsonNode copy = todo.deepCopy();
+            if (copy instanceof ObjectNode obj) {
+                obj.put("status", "completed");
+                return obj;
+            }
+            return todo;
+        }).toList();
     }
     public static Snapshot interrupted(Snapshot saved) {
         return new Snapshot(saved.version, saved.runId, saved.conversationId, saved.revision + 1, "INCOMPLETE", "SERVER_RESTART",

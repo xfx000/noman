@@ -85,9 +85,12 @@ public final class RunTrace {
         if (errorCode != null) finish(errorCode.equals("STOP_REQUESTED") ? "CANCELLED" : "INCOMPLETE");
         else if (!agentEnded || operations.values().stream().anyMatch(op -> op.durationMs == null)) {
             errorCode = "STREAM_INCOMPLETE"; finish("INCOMPLETE");
-        } else if (execution.hasUnfinishedPlan()) {
-            errorCode = "PLAN_INCOMPLETE"; finish("INCOMPLETE");
-        } else finish(operations.values().stream().anyMatch(op -> op.status.equals("FAILED")) ? "PARTIAL" : "SUCCEEDED");
+        } else {
+            execution.completeInProgressIfReported();
+            if (execution.hasUnfinishedPlan()) {
+                errorCode = "PLAN_INCOMPLETE"; finish("INCOMPLETE");
+            } else finish(operations.values().stream().anyMatch(op -> op.status.equals("FAILED")) ? "PARTIAL" : "SUCCEEDED");
+        }
     }
     private void finish(String terminal) {
         if (!running()) return;
