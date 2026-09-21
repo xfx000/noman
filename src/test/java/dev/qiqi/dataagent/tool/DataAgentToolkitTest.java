@@ -36,10 +36,10 @@ class DataAgentToolkitTest {
             public Flux<ChatResponse> stream(List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
                 int step = calls.getAndIncrement();
                 var names = tools.stream().map(ToolSchema::getName).toList();
-                assertThat(names).contains("execute_sql", "reset_equipped_tools");
+                assertThat(names).contains("execute_sql", "reset_equipped_tools", "generate_chart", "todoWrite");
                 if (step == 0) {
-                    assertThat(names).doesNotContain("generate_chart", "web_search");
-                    return invoke("reset_equipped_tools", Map.of("to_activate", List.of("charts", "web")), step);
+                    assertThat(names).doesNotContain("web_search");
+                    return invoke("reset_equipped_tools", Map.of("to_activate", List.of("web")), step);
                 }
                 if (step == 1) {
                     assertThat(names).contains("generate_chart", "web_search");
@@ -63,7 +63,8 @@ class DataAgentToolkitTest {
                 .hasSize(2).allSatisfy(event -> assertThat(event.getState()).isEqualTo(ToolResultState.SUCCESS));
         verify(web).search("public research");
         var offline = toolkits.create(false);
+        assertThat(offline.getTool("generate_chart")).isNotNull();
         assertThat(offline.getTool("web_search")).isNull();
-        assertThat(offline.getToolSchemas(List.of("charts", "web")).stream().map(ToolSchema::getName)).doesNotContain("web_search");
+        assertThat(offline.getToolSchemas(List.of("web")).stream().map(ToolSchema::getName)).doesNotContain("web_search");
     }
 }

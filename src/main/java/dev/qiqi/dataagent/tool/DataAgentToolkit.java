@@ -5,7 +5,7 @@ import dev.qiqi.dataagent.network.WebSearchTool;
 import io.agentscope.core.tool.Toolkit;
 import org.springframework.stereotype.Component;
 
-/** A fresh toolkit per request; optional schemas are exposed through native discovery. */
+/** A fresh toolkit per request; files/web stay behind native discovery, charts are always-on when enabled. */
 @Component
 public class DataAgentToolkit {
     private final CatalogTools catalog;
@@ -23,12 +23,11 @@ public class DataAgentToolkit {
         toolkit.registerTool(sql);
         toolkit.registerAgentTool(execute);
         toolkit.registerAgentTool(new TodoWriteAgentTool());
+        if (charts.enabled()) {
+            toolkit.registerAgentTool(charts);
+        }
         toolkit.createToolGroup("files", "Preview uploaded CSV files and compute exact aggregates over all rows using a fileId.", false);
         toolkit.registration().agentTool(files).group("files").apply();
-        if (charts.enabled()) {
-            toolkit.createToolGroup("charts", "Generate bar, line and pie charts from a queryId returned by execute_sql.", false);
-            toolkit.registration().agentTool(charts).group("charts").apply();
-        }
         if (online && web.enabled()) {
             toolkit.createToolGroup("web", "Search public web sources for current external context and cite URLs. User enabled online search for this turn.", false);
             toolkit.registration().agentTool(web).group("web").apply();

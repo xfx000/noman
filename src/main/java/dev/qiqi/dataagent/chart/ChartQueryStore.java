@@ -25,10 +25,13 @@ public class ChartQueryStore {
     @Autowired public ChartQueryStore(LocalWorkspace workspace) { this.clock = Clock.systemUTC(); this.workspace = workspace; }
 
     public synchronized void remember(String userId, String sessionId, QueryResult result) {
-        if (workspace != null) workspace.write(userId, "evidence", storageKey(sessionId, result.queryId()), result);
         purge();
         entries.put(new Key(userId, sessionId, result.queryId()), new Entry(result, clock.instant().plus(TTL)));
         while (entries.size() > MAX_ENTRIES) entries.remove(entries.keySet().iterator().next());
+        if (workspace != null) {
+            try { workspace.write(userId, "evidence", storageKey(sessionId, result.queryId()), result); }
+            catch (RuntimeException ignored) { /* In-memory evidence still lets the current run chart. */ }
+        }
     }
 
     public synchronized QueryResult require(String userId, String sessionId, String queryId) {

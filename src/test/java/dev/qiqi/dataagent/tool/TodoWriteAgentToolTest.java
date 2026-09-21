@@ -34,5 +34,6 @@ class TodoWriteAgentToolTest {
         assertThat(restored.getTasksContext().getTasks().getFirst().getState().getWire()).isEqualTo("completed");
         assertThat(context("1", "b").getAgentState().getTasksContext().getTasks()).isEmpty();
         assertThat(context("2", "a").getAgentState().getTasksContext().getTasks()).isEmpty();
+        assertThat(new TodoWriteAgentTool().getDescription()).contains("Mandatory").doesNotContain("simple questions");
     }
 }

@@ -1,5 +1,7 @@
 package dev.qiqi.dataagent.observability;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -11,6 +13,7 @@ import java.util.Map;
 /** Durable run snapshots with a bounded one-hour memory cache. Single-node implementation. */
 @Component
 public class RunTraceStore {
+    private static final Logger log = LoggerFactory.getLogger(RunTraceStore.class);
     private dev.qiqi.dataagent.storage.LocalWorkspace workspace;
     public RunTraceStore() {}
     @org.springframework.beans.factory.annotation.Autowired
@@ -51,9 +54,12 @@ public class RunTraceStore {
         return saved.status().equals("RUNNING") ? ExecutionJournal.interrupted(saved) : saved;
     }
     public synchronized void persist(RunTrace trace) {
-        if (workspace != null) {
+        if (workspace == null) return;
+        try {
             workspace.write(Long.toString(trace.owner()), "executions", trace.id(), trace.execution().snapshot());
             workspace.write(Long.toString(trace.owner()), "runs", trace.id(), trace.snapshot());
+        } catch (RuntimeException error) {
+            log.warn("Unable to persist run {} for user {}: {}", trace.id(), trace.owner(), error.toString());
         }
     }
     private void purge() {

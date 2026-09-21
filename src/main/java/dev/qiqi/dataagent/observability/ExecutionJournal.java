@@ -11,7 +11,9 @@ public final class ExecutionJournal {
     private final Map<String, Call> calls = new LinkedHashMap<>();
     private final Map<String, JsonNode> evidence = new LinkedHashMap<>(), charts = new LinkedHashMap<>(), sources = new LinkedHashMap<>();
     private List<JsonNode> todos = List.of();
-    private String status = "RUNNING", errorCode, progress = "正在准备分析", text = "", replyId;
+    private final Map<String, NarrationBuf> narrations = new LinkedHashMap<>();
+    private final List<Step> steps = new ArrayList<>();
+    private String status = "RUNNING", errorCode, progress = "正在准备分析", text = "", replyId, finalNarrationId;
     private long revision;
     private boolean truncated;
 
@@ -20,10 +22,21 @@ public final class ExecutionJournal {
     public synchronized void accept(StreamEvent event) {
         if (!status.equals("RUNNING")) return;
         var data = event.data(); String type = event.type();
+        if (type.equals("THINKING_BLOCK_DELTA")) {
+            progress = "正在分析问题与证据";
+            revision++; return;
+        }
         if (type.equals("TEXT_BLOCK_DELTA")) {
-            String nextReply = string(data.get("replyId"));
-            if (replyId != null && !replyId.equals(nextReply) && !text.isEmpty()) text = append(text, "\n\n", TEXT_LIMIT);
-            replyId = nextReply; text = append(text, string(data.get("delta")), TEXT_LIMIT);
+            String nextReply = replyKey(data);
+            if (replyId != null && !replyId.equals(nextReply)) text = "";
+            replyId = nextReply;
+            text = append(text, string(data.get("delta")), TEXT_LIMIT);
+            appendNarration("text:" + nextReply, "text", string(data.get("delta")));
+            progress = "正在整理分析进展";
+            revision++; return;
+        }
+        if (type.equals("AGENT_END")) {
+            finalNarrationId = replyId == null ? null : "text:" + replyId;
             revision++; return;
         }
         if (type.equals("MODEL_CALL_START")) { progress = "正在整理问题与已有证据"; revision++; return; }
@@ -33,7 +46,9 @@ public final class ExecutionJournal {
         // Missing IDs must never merge unrelated parallel calls into an "undefined" item.
         if (id.isBlank() || id.length() > 200) return;
         if (!calls.containsKey(id) && calls.size() >= MAX_TOOLS) { truncated = true; return; }
+        boolean first = !calls.containsKey(id);
         Call call = calls.computeIfAbsent(id, Call::new);
+        if (first) steps.add(new Step("tool", id));
         if (call.ended) return;
         String name = string(data.get("toolCallName"));
         if (!name.isBlank()) call.name = DisplaySanitizer.limit(name, 100);
@@ -99,7 +114,9 @@ public final class ExecutionJournal {
         return new Snapshot(1, runId, conversationId, revision, status, errorCode, progress,
                 DisplaySanitizer.text(text), calls.values().stream().map(c -> new ToolView(c.id, c.name, c.status,
                         c.arguments, c.result, c.ended ? c.durationMs : elapsed(c.started))).toList(),
-                todos, List.copyOf(evidence.values()), List.copyOf(charts.values()), List.copyOf(sources.values()), truncated);
+                todos, List.copyOf(evidence.values()), List.copyOf(charts.values()), List.copyOf(sources.values()), truncated,
+                narrations.values().stream().map(n -> new Narration(n.id, n.kind, DisplaySanitizer.text(n.content))).toList(),
+                List.copyOf(steps), finalNarrationId);
     }
     public synchronized boolean hasUnfinishedPlan() {
         return todos.stream().anyMatch(todo -> !todo.path("status").asText().equals("completed"));
@@ -109,7 +126,23 @@ public final class ExecutionJournal {
                 "服务重启，已恢复保存的计划与证据", saved.text,
                 saved.tools.stream().map(t -> Set.of("QUEUED", "RUNNING").contains(t.status)
                         ? new ToolView(t.id, t.name, "INCOMPLETE", t.arguments, "服务重启，未收到完整结果", t.durationMs) : t).toList(),
-                saved.todos, saved.evidence, saved.charts, saved.sources, saved.truncated);
+                saved.todos, saved.evidence, saved.charts, saved.sources, saved.truncated, saved.narrations, saved.steps,
+                saved.finalNarrationId);
+    }
+    private void appendNarration(String id, String kind, String delta) {
+        if (id.length() > 220) return;
+        NarrationBuf buf = narrations.get(id);
+        if (buf == null) {
+            if (narrations.size() >= MAX_TOOLS) { truncated = true; return; }
+            buf = new NarrationBuf(id, kind);
+            narrations.put(id, buf);
+            steps.add(new Step(kind, id));
+        }
+        buf.content = append(buf.content, delta, TEXT_LIMIT);
+    }
+    private static String replyKey(Map<String, Object> data) {
+        String reply = string(data.get("replyId"));
+        return reply.isBlank() ? "default" : reply;
     }
     private static String string(Object value) { return value instanceof String s ? s : ""; }
     private static String append(String current, String delta, int max) {
@@ -141,8 +174,21 @@ public final class ExecutionJournal {
         int dataBlocks;
         Call(String id) { this.id = id; }
     }
+    private static final class NarrationBuf {
+        final String id, kind;
+        String content = "";
+        NarrationBuf(String id, String kind) { this.id = id; this.kind = kind; }
+    }
     public record ToolView(String id, String name, String status, String arguments, String result, long durationMs) { }
+    public record Narration(String id, String kind, String content) { }
+    public record Step(String kind, String id) { }
     public record Snapshot(int version, String runId, String conversationId, long revision, String status, String errorCode,
                            String progress, String text, List<ToolView> tools, List<JsonNode> todos,
-                           List<JsonNode> evidence, List<JsonNode> charts, List<JsonNode> sources, boolean truncated) { }
+                           List<JsonNode> evidence, List<JsonNode> charts, List<JsonNode> sources, boolean truncated,
+                           List<Narration> narrations, List<Step> steps, String finalNarrationId) {
+        public Snapshot {
+            narrations = narrations == null ? List.of() : List.copyOf(narrations);
+            steps = steps == null ? List.of() : List.copyOf(steps);
+        }
+    }
 }

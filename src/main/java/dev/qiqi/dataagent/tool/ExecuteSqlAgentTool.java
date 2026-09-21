@@ -54,7 +54,8 @@ public class ExecuteSqlAgentTool implements AgentTool {
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
         // JDBC 是阻塞调用，切到 boundedElastic，避免占用 WebFlux/AgentScope 的事件线程。
-        return Mono.fromCallable(() -> execute(param)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> execute(param)).subscribeOn(Schedulers.boundedElastic())
+                .onErrorResume(error -> Mono.just(ToolResultBlock.error(message(error))));
     }
 
     private ToolResultBlock execute(ToolCallParam param) throws JsonProcessingException {
@@ -80,5 +81,11 @@ public class ExecuteSqlAgentTool implements AgentTool {
         ((com.fasterxml.jackson.databind.node.ObjectNode) summary).remove("rows");
         return ToolResultBlock.of(io.agentscope.core.message.TextBlock.builder().text(mapper.writeValueAsString(result)).build(),
                 Map.of("evidence", summary));
+    }
+
+    private static String message(Throwable error) {
+        String raw = error.getMessage();
+        if (raw == null || raw.isBlank()) raw = error.getClass().getSimpleName();
+        return raw.length() <= 500 ? raw : raw.substring(0, 500);
     }
 }

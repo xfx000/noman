@@ -27,6 +27,10 @@ class WorkspacePersistenceTest {
         assertThat(new ChartArtifactStore(workspace()).require("1", "id")).isEqualTo(artifact);
         assertThatThrownBy(() -> new ChartArtifactStore(workspace()).require("2", "id")).hasMessageContaining("404");
         assertThat(workspace().file("../user", "files", "../../file").normalize().startsWith(directory)).isTrue();
+        var store = workspace();
+        store.write("1", "history", "workbench", Map.of("revision", 1));
+        store.write("1", "history", "workbench", Map.of("revision", 2));
+        assertThat(store.read("1", "history", "workbench", Map.class).orElseThrow().get("revision")).isEqualTo(2);
     }
     @Test void realAgentRestoresConversationFromDiskWithSeparateAgentInstances() {
         var context = RuntimeContext.builder().userId("1").sessionId(LocalWorkspace.key(".." )).build();

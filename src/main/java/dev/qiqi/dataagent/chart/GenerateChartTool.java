@@ -31,9 +31,11 @@ public class GenerateChartTool implements AgentTool {
     public boolean enabled() { return properties.enabled(); }
     @Override public String getName() { return "generate_chart"; }
     @Override public String getDescription() {
-        return "Generate a bar, line or pie chart from an execute_sql queryId in the current session. "
-                + "Select a categoryColumn and numeric valueColumn from the result. Requires 1–100 complete rows and unique categories. "
-                + "Never pass raw data or SQL. The chart is displayed automatically; cite queryId in the answer.";
+        return "Generate a final bar, line or pie chart from a verified execute_sql queryId selected after "
+                + "the analysis evidence is complete. "
+                + "Never ask the user whether to draw a chart. Select a categoryColumn and numeric valueColumn from the result. "
+                + "Requires 1–100 complete rows and unique categories. Never pass raw data or SQL. "
+                + "The chart is revealed with the final report; cite queryId in the answer.";
     }
     @Override public Map<String, Object> getParameters() {
         return Map.of("type", "object", "additionalProperties", false,
@@ -63,7 +65,8 @@ public class GenerateChartTool implements AgentTool {
                 .publishOn(Schedulers.boundedElastic())
                 .map(artifact -> artifacts == null ? artifact : artifacts.save(param.getRuntimeContext().getUserId(), artifact))
                 .map(artifact -> ToolResultBlock.of(
-                        TextBlock.builder().text("图表已生成并显示：" + artifact.title() + "；查询证据 queryId=" + artifact.queryId()).build(),
+                        TextBlock.builder().text("图表产物已生成，将随最终报告展示：" + artifact.title()
+                                + "；查询证据 queryId=" + artifact.queryId()).build(),
                         Map.of("chart", artifact)))
                 .onErrorResume(error -> Mono.just(ToolResultBlock.error(
                         error instanceof IllegalArgumentException || error instanceof SecurityException

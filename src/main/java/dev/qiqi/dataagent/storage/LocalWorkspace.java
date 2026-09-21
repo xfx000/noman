@@ -32,9 +32,19 @@ public class LocalWorkspace {
         try {
             Files.createDirectories(path.getParent());
             Path temp = Files.createTempFile(path.getParent(), "save-", ".tmp");
-            try { json.writeValue(temp.toFile(), value); Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-            finally { Files.deleteIfExists(temp); }
+            try {
+                json.writeValue(temp.toFile(), value);
+                replace(temp, path);
+            } finally { Files.deleteIfExists(temp); }
         } catch (IOException e) { throw new IllegalStateException("Unable to persist workspace data", e); }
+    }
+    private static void replace(Path temp, Path path) throws IOException {
+        try {
+            Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException | AccessDeniedException ignored) {
+            // Windows often cannot ATOMIC_MOVE over an existing locked file.
+            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
     public synchronized <T> Optional<T> read(String owner, String collection, String id, Class<T> type) {
         Path path = file(owner, collection, id);

@@ -67,6 +67,21 @@ function streamed(text) {
     }),
   );
 }
+function controlledStream() {
+  let controller;
+  const response = new Response(new ReadableStream({
+    start(value) { controller = value; },
+  }));
+  return {
+    response,
+    emit(event) {
+      controller.enqueue(new TextEncoder().encode(
+        `event:${event.type}\r\ndata:${JSON.stringify(event)}\r\n\r\n`,
+      ));
+    },
+    close() { controller.close(); },
+  };
+}
 (async () => {
   let journal;
   const timeline = await setup((options) => {
@@ -78,7 +93,21 @@ function streamed(text) {
           result: '<img src=x onerror=alert(1)> queryId=q1', durationMs: 30 },
         { id: "bad", name: "web_search", status: "FAILED", arguments: '{"query":"public"}', result: "WEB_TIMEOUT", durationMs: 100 }
       ], todos: [{ id: "t1", content: "核对订单", status: "completed" }, { id: "t2", content: "核对外部资料", status: "pending" }],
-      evidence: [{ queryId: "q1", executedSql: "SELECT COUNT(*) FROM sales_order", rowCount: 1, durationMs: 30 }], charts: [], sources: [] };
+      evidence: [{ queryId: "q1", executedSql: "SELECT COUNT(*) FROM sales_order", rowCount: 1, durationMs: 30 }], charts: [], sources: [],
+      narrations: [
+        { id: "thinking:legacy", kind: "thinking", content: "private chain of thought" },
+        { id: "text:progress", kind: "text", content: "正在核对已付款订单口径。" },
+        { id: "text:final", kind: "text", content: "已有真实查询证据" },
+      ],
+      finalNarrationId: "text:final",
+      steps: [
+        { kind: "thinking", id: "thinking:legacy" },
+        { kind: "text", id: "text:progress" },
+        { kind: "tool", id: "plan" },
+        { kind: "tool", id: "sql" },
+        { kind: "tool", id: "bad" },
+        { kind: "text", id: "text:final" },
+      ] };
     return streamed(events([
       ev("RUN_START", { run: { runId: journal.runId, status: "RUNNING" } }),
       ev("EXECUTION_UPDATE", { execution: { ...journal, status: "RUNNING", revision: 2,
@@ -92,20 +121,49 @@ function streamed(text) {
   });
   await timeline.send("分析订单和外部资料");
   const timelineDocument = timeline.document;
-  assert.equal(timelineDocument.querySelectorAll(".tool-step").length, 3);
+  assert.equal(timelineDocument.querySelectorAll(".tool-step").length, 2);
   assert.match(timelineDocument.querySelector(".todo-panel").textContent, /1\/2/);
-  assert.match(timelineDocument.querySelectorAll(".tool-payload")[2].textContent, /SELECT COUNT/);
+  assert.match(timelineDocument.querySelectorAll(".tool-payload")[0].textContent, /SELECT COUNT/);
   assert.equal(timelineDocument.querySelectorAll(".tool-detail img").length, 0);
   assert.match(timelineDocument.querySelector(".tool-step.failed").textContent, /WEB_TIMEOUT/);
+  assert.match(timelineDocument.querySelector(".analysis-narrative").textContent, /正在核对已付款订单口径/);
+  assert.equal(timelineDocument.querySelector(".execution-details").open, true);
+  assert.match(timelineDocument.querySelector(".execution-summary").textContent, /2 次执行.*1 项未成功/);
+  assert.equal(timelineDocument.querySelectorAll(".timeline-item").length, 0);
+  assert.match(timelineDocument.querySelector(".final-result").textContent, /已有真实查询证据/);
+  assert.doesNotMatch(timelineDocument.querySelector(".message.assistant").textContent, /思考过程|private chain/);
+  assert.deepEqual(
+    [...timelineDocument.querySelector(".final-result").children].map((node) => node.className),
+    ["result-conclusion", "chart-results", "report-body markdown-body",
+      "web-sources", "query-evidence", "report-actions"],
+  );
   assert.equal(timelineDocument.querySelectorAll(".evidence-item").length, 1);
   const timelineSaved = timeline.localStorage.getItem("qiqi.conversations.v1.admin");
   timeline.close();
   const timelineRestored = await setup(() => { throw new Error("Restore must not call model"); },
     { "qiqi.conversations.v1.admin": timelineSaved });
-  assert.equal(timelineRestored.document.querySelectorAll(".tool-step").length, 3);
+  assert.equal(timelineRestored.document.querySelectorAll(".tool-step").length, 2);
   assert.match(timelineRestored.document.querySelector(".todo-panel").textContent, /核对订单/);
-  assert.match(timelineRestored.document.querySelector(".report").textContent, /已有真实查询证据/);
+  assert.match(timelineRestored.document.querySelector(".final-result").textContent, /已有真实查询证据/);
   timelineRestored.close();
+  const successfulTools = await setup((options) => {
+    const body = JSON.parse(options.body);
+    return streamed(events([
+      ev("EXECUTION_UPDATE", { execution: {
+        version: 1, runId: "aaaaaaaa-1234-1234-1234-123456789abc",
+        conversationId: body.conversationId, revision: 1, status: "RUNNING",
+        progress: "正在查询", text: "", todos: [], evidence: [], charts: [], sources: [],
+        narrations: [], steps: [{ kind: "tool", id: "sql" }],
+        tools: [{ id: "sql", name: "execute_sql", status: "SUCCEEDED",
+          arguments: "{}", result: "queryId=q1", durationMs: 20 }],
+      } }),
+      ev("TEXT_BLOCK_DELTA", { replyId: "final", delta: "查询完成。" }),
+      ev("AGENT_END"),
+    ]));
+  });
+  await successfulTools.send("查询");
+  assert.equal(successfulTools.document.querySelector(".execution-details").open, false);
+  successfulTools.close();
   const interruptedHistory = JSON.parse(timelineSaved);
   interruptedHistory.chats[0].turns[0].pending = true;
   interruptedHistory.chats[0].turns[0].execution = { ...journal, status: "RUNNING", revision: 6 };
@@ -205,10 +263,29 @@ function streamed(text) {
   restoredResearch.close();
   const exhausted = await setup(() => streamed(events([ev("AGENT_END"), ev("RUN_END", { run: { ...sampleRun, status: "INCOMPLETE", errorCode: "MAX_ITERATIONS" } })])));
   await exhausted.send("complex");
-  assert.match(exhausted.document.querySelector(".response-error").textContent, /MAX_ITERATIONS/);
+  const exhaustedNotice =
+    exhausted.document.querySelector(".response-note") ||
+    exhausted.document.querySelector(".response-error");
+  assert.ok(exhaustedNotice);
+  assert.match(exhaustedNotice.textContent, /分析轮数上限/);
   exhausted.close();
   console.log("PASS per-turn online opt-in, source safety, diagnostics, usage, history and incomplete runs");
   const chart = { id: "chart-1", queryId: "query-1", title: "收入 <script>bad</script>", type: "bar", source: "https://storage.example/chart.png" };
+  const controlled = controlledStream();
+  const staged = await setup(() => controlled.response);
+  const pendingChartRun = staged.send("比较收入");
+  controlled.emit(ev("TOOL_RESULT_END", {
+    toolCallId: "chart", toolCallName: "generate_chart", state: "success",
+    metadata: { chart },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(staged.document.querySelectorAll(".chart-card").length, 0);
+  controlled.emit(ev("TEXT_BLOCK_DELTA", { replyId: "final", delta: "分析完成。" }));
+  controlled.emit(ev("AGENT_END"));
+  controlled.close();
+  await pendingChartRun;
+  assert.equal(staged.document.querySelectorAll(".chart-card").length, 1);
+  staged.close();
   const chartEvents = [
     ev("TOOL_CALL_START", { toolCallId: "chart-call", toolCallName: "generate_chart" }),
     ev("TOOL_RESULT_END", { toolCallId: "chart-call", toolCallName: "generate_chart", state: "success", metadata: { chart } }),
@@ -242,7 +319,7 @@ function streamed(text) {
     ev("TEXT_BLOCK_DELTA", { replyId: "fallback", delta: "查询仍然成功。" }), ev("AGENT_END"),
   ])));
   await outage.send("画图");
-  assert.match(outage.document.querySelector(".chart-error").textContent, /超时/);
+  assert.match(outage.document.querySelector(".execution-warning").textContent, /超时/);
   assert.match(outage.document.querySelector(".report").textContent, /查询仍然成功/);
   assert.equal(outage.document.querySelectorAll(".chart-card").length, 0);
   outage.close();
@@ -269,13 +346,13 @@ function streamed(text) {
   td.querySelector("#close-settings").click();
   const typingRun = typing.send("打字测试");
   await new Promise((r) => setTimeout(r, 110));
-  const partial = td.querySelector(".report").textContent;
+  const partial = td.querySelector(".analysis-narrative").textContent;
   assert.ok(partial.length > 0 && partial.length < typingText.length);
   assert.ok(!partial.includes("\ufffd"));
   assert.equal(td.querySelector("#stop").hidden, false);
   td.querySelector("#stop").click();
   await typingRun;
-  assert.equal(td.querySelector(".report").textContent.trim(), typingText);
+  assert.equal(td.querySelector(".result-conclusion-body").textContent.trim(), typingText);
   assert.equal(td.querySelector(".report").classList.contains("typing"), false);
   assert.match(td.querySelector(".response-status").textContent, /已停止/);
   typing.close();
@@ -297,7 +374,7 @@ function streamed(text) {
   );
   await themeRestored.send("关闭打字效果");
   assert.equal(
-    themeRestored.document.querySelector(".report").textContent.trim(),
+    themeRestored.document.querySelector(".result-conclusion-body").textContent.trim(),
     typingText,
   );
   themeRestored.close();

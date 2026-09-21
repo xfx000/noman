@@ -15,9 +15,10 @@ import java.util.*;
 public class TodoWriteAgentTool implements AgentTool {
     public String getName() { return "todoWrite"; }
     public String getDescription() {
-        return "Create/update the complete task plan for a multi-step analysis. Use before data exploration, "
-                + "then update each step as work proceeds. At most one in_progress. Preserve unfinished tasks on failure. "
-                + "Do not use for simple questions or mark unverified work completed.";
+        return "Mandatory task list for every analysis request. Call this before any schema, SQL, file or chart tool, "
+                + "then update each step as work proceeds. At most one in_progress. Mark a task in_progress before starting "
+                + "it and completed immediately after it is verified. Do not batch-update after the fact. "
+                + "Do not write the final report in the same turn. Preserve unfinished tasks on failure; never mark unverified work completed.";
     }
     public Map<String, Object> getParameters() {
         var item = Map.of("type", "object", "additionalProperties", false,

@@ -1,0 +1,95 @@
+<h2>Qiqi 分析结果应该怎样呈现？</h2>
+<p class="subtitle">三个方案都遵循：先完成数据分析，再生成图表；图表只在最终报告阶段展示。</p>
+
+<div class="section">
+  <div class="label">新的图表链路</div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <span style="padding:7px 10px;border-radius:999px;background:#eef5ee;color:#476a46;font-size:12px">查询并验证证据</span>
+    <span style="color:#9a9a92">→</span>
+    <span style="padding:7px 10px;border-radius:999px;background:#f4f1e8;color:#7a6845;font-size:12px">形成中文阶段结论</span>
+    <span style="color:#9a9a92">→</span>
+    <span style="padding:7px 10px;border-radius:999px;background:#edf2f8;color:#4b6983;font-size:12px">选择最终图表数据</span>
+    <span style="color:#9a9a92">→</span>
+    <span style="padding:7px 10px;border-radius:999px;background:#f0eef8;color:#645b8d;font-size:12px">报告与图表一起展示</span>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="results-first" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#f5f7f3">
+      <div style="background:white;border:1px solid #e7e9e4;border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(44,56,40,.06)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <strong style="color:#2e352d">Qiqi 数据分析</strong>
+          <span style="font-size:11px;color:#66885b;background:#eef5ec;padding:4px 8px;border-radius:999px">正在核对收入口径</span>
+        </div>
+        <div style="background:#f8faf7;border-radius:11px;padding:11px 12px;margin-bottom:10px">
+          <div style="font-size:11px;color:#80907a;margin-bottom:5px">分析思路</div>
+          <div style="font-size:12px;color:#4d554a">先统一“已付款收入”口径，再比较 1 月与 2 月，并按部门拆分差异。</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <span style="font-size:10px;padding:4px 7px;border:1px solid #e2e6df;border-radius:6px;color:#71776d">✓ 读取订单结构</span>
+          <span style="font-size:10px;padding:4px 7px;border:1px solid #e2e6df;border-radius:6px;color:#71776d">✓ 校验收入 SQL</span>
+          <span style="font-size:10px;padding:4px 7px;border:1px solid #e2e6df;border-radius:6px;color:#71776d">执行记录 8 项 ▾</span>
+        </div>
+        <div style="border-top:1px solid #eceeea;padding-top:13px">
+          <div style="font-size:11px;color:#7c8377">完成后</div>
+          <strong style="display:block;margin:4px 0 8px;color:#2e352d">2 月收入较 1 月增长 18.9%</strong>
+          <div style="height:54px;border-radius:8px;background:linear-gradient(90deg,#8cab82 0 36%,#6487a2 36% 82%,#d7ddd3 82%);opacity:.8"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A · 结果优先 + 紧凑执行记录（推荐）</h3>
+      <p>中文分析思路是主线；工具调用折叠成紧凑状态。最终结论和图表最醒目。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="narrative-timeline" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#f5f7f3">
+      <div style="background:white;border:1px solid #e7e9e4;border-radius:16px;padding:16px">
+        <strong style="color:#2e352d">Qiqi 的分析过程</strong>
+        <div style="border-left:2px solid #dfe6db;margin:14px 0 0 6px;padding-left:14px;display:grid;gap:12px">
+          <div>
+            <div style="font-size:11px;color:#78906f">分析思路</div>
+            <div style="font-size:12px;color:#4d554a">需要先确认收入是否以订单总额为准。</div>
+          </div>
+          <div style="font-size:11px;color:#7a8074"><span style="color:#69915f">●</span> 已核对订单表与付款状态</div>
+          <div>
+            <div style="font-size:11px;color:#78906f">阶段发现</div>
+            <div style="font-size:12px;color:#4d554a">2 月总收入更高，下一步拆分部门贡献。</div>
+          </div>
+          <div style="font-size:11px;color:#7a8074"><span style="color:#69915f">●</span> 已完成部门聚合查询</div>
+          <div style="font-size:12px;font-weight:600;color:#354034">最终报告与图表</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B · 叙事型时间线</h3>
+      <p>思路、阶段发现、工具动作全部按时序交错。过程最完整，但长任务容易变得很长。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="split-workbench" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#f5f7f3">
+      <div style="display:grid;grid-template-columns:1.25fr .75fr;gap:8px;background:white;border:1px solid #e7e9e4;border-radius:16px;padding:12px">
+        <div style="border-right:1px solid #eceeea;padding-right:10px">
+          <strong style="font-size:12px;color:#2e352d">分析叙述</strong>
+          <div style="font-size:11px;line-height:1.7;color:#5d6659;margin-top:10px">正在确认时间范围和收入口径……</div>
+          <div style="font-size:11px;line-height:1.7;color:#5d6659;margin-top:9px">阶段发现：2 月增量主要来自北区。</div>
+        </div>
+        <div>
+          <strong style="font-size:12px;color:#2e352d">证据</strong>
+          <div style="font-size:10px;color:#737a70;background:#f6f8f5;padding:6px;border-radius:6px;margin-top:9px">查询证据 3</div>
+          <div style="font-size:10px;color:#737a70;background:#f6f8f5;padding:6px;border-radius:6px;margin-top:6px">图表已准备 1</div>
+          <div style="font-size:10px;color:#737a70;background:#f6f8f5;padding:6px;border-radius:6px;margin-top:6px">执行记录 8</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C · 双栏分析工作台</h3>
+      <p>左侧看中文分析，右侧看证据与产物。信息密度高，但窄屏适配和实现成本最高。</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:18px">点击一个方案进行选择。我推荐 A：它能最大幅度解决“全是 tool 节点”和“最终结果不突出”。</p>

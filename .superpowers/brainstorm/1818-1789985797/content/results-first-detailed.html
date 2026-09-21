@@ -1,0 +1,101 @@
+<h2>方案 A 细化：分析中简洁，完成后突出结果</h2>
+<p class="subtitle">左边是运行过程，右边是分析完成后的最终呈现。内部原始推理不直接公开，只展示中文业务分析说明。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">分析中</div>
+    <div class="mockup-body" style="background:#f4f6f2;padding:18px">
+      <div style="background:#fff;border:1px solid #e3e8df;border-radius:18px;padding:18px;box-shadow:0 12px 32px rgba(45,58,41,.06)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-size:11px;color:#8a9186">QIQI · 数据分析</div>
+            <strong style="display:block;color:#2f392d;margin-top:3px">正在核对部门收入差异</strong>
+          </div>
+          <span style="font-size:11px;color:#537050;background:#edf5eb;padding:5px 9px;border-radius:999px">3 / 5</span>
+        </div>
+        <div style="height:4px;background:#edf0eb;border-radius:999px;margin:14px 0 16px;overflow:hidden">
+          <div style="height:100%;width:60%;background:#6d9465;border-radius:999px"></div>
+        </div>
+
+        <div style="border-radius:12px;background:#f8faf7;padding:13px 14px;border-left:3px solid #76936f">
+          <div style="font-size:11px;color:#71806d;margin-bottom:6px">当前分析思路</div>
+          <div style="font-size:13px;line-height:1.7;color:#465044">1 月与 2 月都按已付款订单统计。总收入差异已经确认，正在拆分北区和南区的贡献。</div>
+        </div>
+
+        <div style="margin-top:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <strong style="font-size:12px;color:#4d554a">阶段发现</strong>
+            <span style="font-size:10px;color:#8c9388">18:20</span>
+          </div>
+          <p style="font-size:12px;line-height:1.7;color:#666e62;margin:7px 0 0">2 月总收入高于 1 月，下一步确认增长来自哪个部门，而不是提前生成图表。</p>
+        </div>
+
+        <details style="margin-top:15px;border-top:1px solid #ecefeb;padding-top:11px">
+          <summary style="font-size:11px;color:#788074;cursor:pointer">技术执行记录 · 8 项 · 1 项进行中</summary>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+            <span style="font-size:10px;padding:4px 7px;border:1px solid #e0e5dc;border-radius:7px;color:#6d7569">✓ 读取表结构</span>
+            <span style="font-size:10px;padding:4px 7px;border:1px solid #e0e5dc;border-radius:7px;color:#6d7569">✓ 校验 SQL</span>
+            <span style="font-size:10px;padding:4px 7px;border:1px solid #e8dcbf;border-radius:7px;color:#806d42">● 查询部门收入</span>
+          </div>
+        </details>
+        <div style="font-size:11px;color:#93988f;text-align:center;margin-top:14px">分析过程中不展示图表</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">分析完成</div>
+    <div class="mockup-body" style="background:#f4f6f2;padding:18px">
+      <div style="background:#fff;border:1px solid #e3e8df;border-radius:18px;padding:18px;box-shadow:0 12px 32px rgba(45,58,41,.06)">
+        <div style="font-size:11px;color:#6f8d68;margin-bottom:5px">分析完成 · 5 / 5</div>
+        <strong style="font-size:16px;line-height:1.5;color:#2e382c">2 月已付款收入环比增长 18.9%</strong>
+        <p style="font-size:12px;line-height:1.7;color:#626b5f;margin:8px 0 14px">增长主要由北区贡献，南区收入小幅回落。统计范围为 2026-01-01 至 2026-02-28。</p>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:14px">
+          <div style="background:#f7f9f5;border-radius:9px;padding:9px">
+            <div style="font-size:9px;color:#8b9187">1 月</div><strong style="font-size:12px;color:#3d473b">1.54 万</strong>
+          </div>
+          <div style="background:#f7f9f5;border-radius:9px;padding:9px">
+            <div style="font-size:9px;color:#8b9187">2 月</div><strong style="font-size:12px;color:#3d473b">1.84 万</strong>
+          </div>
+          <div style="background:#eef5ec;border-radius:9px;padding:9px">
+            <div style="font-size:9px;color:#72816e">环比</div><strong style="font-size:12px;color:#54734f">+18.9%</strong>
+          </div>
+        </div>
+
+        <div style="font-size:11px;color:#727a6f;margin-bottom:7px">已付款收入与部门贡献</div>
+        <div style="height:92px;border-radius:11px;background:
+          linear-gradient(to top,rgba(255,255,255,.92),rgba(255,255,255,0)),
+          linear-gradient(90deg,#a9bfa1 0 22%,transparent 22% 27%,#6f94aa 27% 64%,transparent 64% 69%,#799e70 69% 100%);
+          border:1px solid #edf0eb"></div>
+        <div style="font-size:10px;color:#90968c;margin-top:6px">图表来自最终选定的查询证据，不来自自然语言数字。</div>
+
+        <details style="margin-top:15px;border-top:1px solid #ecefeb;padding-top:11px">
+          <summary style="font-size:11px;color:#788074;cursor:pointer">查看分析过程与查询证据</summary>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>交互规则</h3>
+  <ol style="line-height:1.9;color:#596156">
+    <li>运行中只显示最近的中文分析思路、阶段发现和总体进度。</li>
+    <li>工具调用默认折叠；失败时自动展开错误，成功调用只显示紧凑状态。</li>
+    <li>模型完成数据核对后，才选择最终 queryId 并生成图表。</li>
+    <li>图表即使已在后台生成，也缓存到最终报告完成后再展示。</li>
+    <li>最终页面先给结论、关键指标和图表，分析过程与证据移到下方折叠区。</li>
+  </ol>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve-detailed-a" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>按这个方案实施</h3><p>认可两种状态和信息层级。</p></div>
+  </div>
+  <div class="option" data-choice="adjust-detailed-a" onclick="toggleSelect(this)">
+    <div class="letter">↺</div>
+    <div class="content"><h3>还要调整</h3><p>在终端告诉我希望改哪里。</p></div>
+  </div>
+</div>

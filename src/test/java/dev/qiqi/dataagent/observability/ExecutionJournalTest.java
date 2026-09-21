@@ -38,6 +38,26 @@ class ExecutionJournalTest {
         assertThat(journal.snapshot().tools().get(1).status()).isEqualTo("CANCELLED");
         assertThat(journal.snapshot().tools().getFirst().status()).isEqualTo("SUCCEEDED");
     }
+    @Test void privateThinkingIsNotPublishedAndAgentEndMarksTheFinalTextReply() {
+        var journal = new ExecutionJournal("run", "session");
+        journal.accept(new StreamEvent("THINKING_BLOCK_DELTA",
+                Map.of("replyId", "private", "delta", "token=secret-value internal reasoning")));
+        journal.accept(new StreamEvent("TEXT_BLOCK_DELTA",
+                Map.of("replyId", "progress", "delta", "正在核对已付款订单口径。")));
+        journal.accept(event("TOOL_CALL_START", "sql", "execute_sql", ""));
+        journal.accept(new StreamEvent("TEXT_BLOCK_DELTA",
+                Map.of("replyId", "final", "delta", "2 月收入较 1 月增长。")));
+        journal.accept(new StreamEvent("AGENT_END", Map.of("replyId", "final")));
+
+        var snapshot = journal.snapshot();
+        assertThat(snapshot.toString()).doesNotContain("internal reasoning", "secret-value");
+        assertThat(snapshot.narrations()).extracting(ExecutionJournal.Narration::id)
+                .containsExactly("text:progress", "text:final");
+        assertThat(snapshot.finalNarrationId()).isEqualTo("text:final");
+        assertThat(snapshot.text()).isEqualTo("2 月收入较 1 月增长。");
+        assertThat(snapshot.steps()).extracting(ExecutionJournal.Step::kind)
+                .containsExactly("text", "tool", "text");
+    }
     @Test void missingIdsMalformedJsonAndOversizedPayloadDoNotLeakOrMerge() {
         var journal = new ExecutionJournal("r", "s");
         journal.accept(new StreamEvent("TOOL_RESULT_START", Map.of("toolCallName", "bad")));
