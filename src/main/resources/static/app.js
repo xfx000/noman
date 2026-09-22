@@ -682,7 +682,7 @@ async function loadMeta() {
   $("#online-search").disabled = !state.webSearchEnabled;
   $("#online-hint").textContent = state.webSearchEnabled
     ? "仅本次提问 · 搜索关键词将发送给 Tavily"
-    : "搜索服务未配置";
+    : "联网搜索暂未启用，需配置搜索服务。数据库查询和 CSV 分析不受影响。";
   updateScope();
   state.workspaceEnabled = Boolean(meta.workspaceEnabled);
   state.executionEnabled = Boolean(meta.executionEnabled);

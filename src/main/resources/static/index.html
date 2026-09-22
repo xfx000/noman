@@ -121,9 +121,21 @@
             required
           ></textarea>
           <div class="composer-options">
-            <label class="online-option"><input type="checkbox" id="online-search" disabled> 联网搜索</label>
-            <span id="online-hint">检查搜索服务…</span>
-            <label class="file-upload-label">上传 CSV<input id="file-upload" type="file" accept=".csv,text/csv" class="sr-only"></label>
+            <label class="online-option">
+              <input type="checkbox" id="online-search" class="sr-only" aria-describedby="online-hint" disabled>
+              <svg class="composer-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>
+              <span>联网搜索</span><span class="online-indicator" aria-hidden="true"></span>
+            </label>
+            <span class="online-help">
+              <button type="button" class="online-help-button" aria-label="联网搜索说明" aria-describedby="online-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg>
+              </button>
+              <span id="online-hint" role="tooltip">正在检查搜索服务…</span>
+            </span>
+            <label class="file-upload-label">
+              <svg class="composer-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8"/><path d="m6 14 8-8"/></svg>
+              <span>上传 CSV</span><input id="file-upload" type="file" accept=".csv,text/csv" class="sr-only">
+            </label>
             <span id="file-status" role="status"></span>
           </div>
           <div class="composer-bottom">
