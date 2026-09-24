@@ -1,6 +1,11 @@
 package dev.qiqi.dataagent.web;
 
 import dev.qiqi.dataagent.agent.DataAgentService;
+import dev.qiqi.dataagent.plan.AnalysisPlan;
+import dev.qiqi.dataagent.plan.AnalysisPlanGate;
+import dev.qiqi.dataagent.plan.SubmitAnalysisPlanTool;
+import dev.qiqi.dataagent.plan.ToolArgumentContent;
+import dev.qiqi.dataagent.storage.LocalWorkspace;
 import dev.qiqi.dataagent.identity.IdentityService;
 import dev.qiqi.dataagent.identity.UserIdentity;
 import dev.qiqi.dataagent.chart.ChartProperties;
@@ -22,6 +27,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
+import io.agentscope.core.event.ConfirmResult;
+import io.agentscope.core.event.RequireUserConfirmEvent;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.message.UserMessage;
+
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -36,9 +48,10 @@ public class ChatController {
     private final WebSearchProperties webSearch;
     private final RunTraceStore traces;
     private final dev.qiqi.dataagent.agent.RunCoordinator coordinator;
+    private final AnalysisPlanGate plans;
     private final Duration runTimeout;
 
-    public ChatController(DataAgentService agent, IdentityService identities, AgentEventMapper eventMapper, ChartProperties charts, WebSearchProperties webSearch, RunTraceStore traces, dev.qiqi.dataagent.agent.RunCoordinator coordinator,
+    public ChatController(DataAgentService agent, IdentityService identities, AgentEventMapper eventMapper, ChartProperties charts, WebSearchProperties webSearch, RunTraceStore traces, dev.qiqi.dataagent.agent.RunCoordinator coordinator, AnalysisPlanGate plans,
                           @org.springframework.beans.factory.annotation.Value("${qiqi.model.run-timeout:10m}") Duration runTimeout) {
         this.agent = agent;
         this.identities = identities;
@@ -47,6 +60,7 @@ public class ChatController {
         this.webSearch = webSearch;
         this.traces = traces;
         this.coordinator = coordinator;
+        this.plans = plans;
         if (runTimeout.isNegative() || runTimeout.isZero() || runTimeout.compareTo(Duration.ofMinutes(30)) > 0)
             throw new IllegalArgumentException("run-timeout must be positive and at most 30 minutes");
         this.runTimeout = runTimeout;
@@ -75,10 +89,26 @@ public class ChatController {
             long[] lastSaved = {0}, lastPublished = {0};
             // A total deadline applies even when tools keep producing events.
             long deadlineNanos = System.nanoTime() + runTimeout.toNanos();
-            Flux<StreamEvent> events = Flux.defer(() -> agent.stream(request.query().trim(), conversationId, identity, request.online(), handle.cancellation()))
+            String userId = Long.toString(identity.id());
+            String sessionId = LocalWorkspace.key(conversationId);
+            var pending = plans.pending(userId, sessionId);
+            boolean resumePlan = pending != null || request.plan() != null;
+            if (!resumePlan) plans.clearRound(userId, sessionId);
+            Flux<StreamEvent> events = Flux.defer(() -> (resumePlan
+                    ? agent.stream(resumeMessage(request, userId, sessionId, pending), conversationId, identity, request.online(), handle.cancellation())
+                    : agent.stream(request.query().trim(), conversationId, identity, request.online(), handle.cancellation())))
                     .publishOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                    .map(eventMapper::map)
-                    .concatMap(event -> {
+                    .concatMap(raw -> {
+                        if (raw instanceof RequireUserConfirmEvent confirm) {
+                            StreamEvent card = planCard(confirm, userId, sessionId);
+                            if (card != null) {
+                                trace.accept(card);
+                                trace.awaitConfirmation();
+                                traces.persist(trace);
+                                return Flux.just(card, executionEvent(trace));
+                            }
+                        }
+                        StreamEvent event = eventMapper.map(raw);
                         trace.accept(event);
                         long now = System.nanoTime();
                         boolean boundary = event.type().endsWith("_END") || event.type().equals("TOOL_RESULT_START")
@@ -111,6 +141,38 @@ public class ChatController {
                         try { traces.persist(trace); } finally { coordinator.release(handle); }
                     });
         }).map(event -> ServerSentEvent.<StreamEvent>builder(event).event(event.type()).build());
+    }
+
+    private Msg resumeMessage(ChatRequest request, String userId, String sessionId, AnalysisPlanGate.PendingCall pending) {
+        if (pending == null) throw new IllegalArgumentException("当前没有待确认的分析计划。");
+        if (request.plan() != null && request.plan().toolCallId() != null
+                && !request.plan().toolCallId().isBlank() && !request.plan().toolCallId().equals(pending.id()))
+            throw new IllegalArgumentException("待确认的计划已变化，请刷新后再操作。");
+        boolean confirmed = request.plan() != null && request.plan().confirmed();
+        String feedback = request.plan() != null && request.plan().feedback() != null && !request.plan().feedback().isBlank()
+                ? request.plan().feedback().trim() : request.query().trim();
+        if (!confirmed && feedback.isBlank()) throw new IllegalArgumentException("请写下修改意见。");
+        Map<String, Object> input = new HashMap<>(pending.input() == null ? Map.of() : pending.input());
+        if (!confirmed) input.put("userFeedback", feedback);
+        plans.clearPending(userId, sessionId);
+        var call = ToolUseBlock.builder().id(pending.id()).name(pending.name()).input(input)
+                .content(ToolArgumentContent.json(input)).build();
+        return UserMessage.builder().textContent(confirmed ? "开始任务" : feedback)
+                .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, List.of(new ConfirmResult(true, call))))
+                .build();
+    }
+
+    private StreamEvent planCard(RequireUserConfirmEvent confirm, String userId, String sessionId) {
+        var call = confirm.getToolCalls().stream()
+                .filter(tool -> SubmitAnalysisPlanTool.NAME.equals(tool.getName())).findFirst().orElse(null);
+        if (call == null) return null;
+        plans.savePending(userId, sessionId, new AnalysisPlanGate.PendingCall(call.getId(), call.getName(), call.getInput()));
+        AnalysisPlan plan = AnalysisPlan.fromInput(call.getInput());
+        return new StreamEvent("PLAN_CARD", Map.of(
+                "toolCallId", call.getId(),
+                "title", plan.title(),
+                "sections", plan.sections(),
+                "deliverables", plan.deliverables()));
     }
 
     private StreamEvent executionEvent(RunTrace trace) {

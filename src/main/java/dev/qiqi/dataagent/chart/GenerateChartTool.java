@@ -1,6 +1,8 @@
 package dev.qiqi.dataagent.chart;
 
 import dev.qiqi.dataagent.identity.IdentityService;
+import dev.qiqi.dataagent.plan.AnalysisPlanGate;
+import dev.qiqi.dataagent.plan.PlanExecutionGuard;
 import dev.qiqi.dataagent.identity.UserIdentity;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultBlock;
@@ -20,13 +22,14 @@ public class GenerateChartTool implements AgentTool {
     private final IdentityService identities;
     private final ChartMcpClient client;
     private final ChartArtifactStore artifacts;
+    private final AnalysisPlanGate plans;
 
-    public GenerateChartTool(ChartProperties properties, ChartQueryStore queries, IdentityService identities, ChartMcpClient client) {
-        this(properties, queries, identities, client, null);
+    public GenerateChartTool(ChartProperties properties, ChartQueryStore queries, IdentityService identities, ChartMcpClient client, AnalysisPlanGate plans) {
+        this(properties, queries, identities, client, null, plans);
     }
     @org.springframework.beans.factory.annotation.Autowired
-    public GenerateChartTool(ChartProperties properties, ChartQueryStore queries, IdentityService identities, ChartMcpClient client, ChartArtifactStore artifacts) {
-        this.properties = properties; this.queries = queries; this.identities = identities; this.client = client; this.artifacts = artifacts;
+    public GenerateChartTool(ChartProperties properties, ChartQueryStore queries, IdentityService identities, ChartMcpClient client, ChartArtifactStore artifacts, AnalysisPlanGate plans) {
+        this.properties = properties; this.queries = queries; this.identities = identities; this.client = client; this.artifacts = artifacts; this.plans = plans;
     }
     public boolean enabled() { return properties.enabled(); }
     @Override public String getName() { return "generate_chart"; }
@@ -53,6 +56,8 @@ public class GenerateChartTool implements AgentTool {
             var context = param.getRuntimeContext();
             if (context == null || context.getUserId() == null || context.getSessionId() == null)
                 throw new SecurityException("缺少服务端身份或会话。");
+            if (PlanExecutionGuard.block(context, plans) != null)
+                throw new IllegalArgumentException(AnalysisPlanGate.BLOCKED_MESSAGE);
             identities.findActiveById(context.getUserId()).filter(UserIdentity::canQuery)
                     .orElseThrow(() -> new SecurityException("当前用户不能使用查询结果。"));
             var input = param.getInput();

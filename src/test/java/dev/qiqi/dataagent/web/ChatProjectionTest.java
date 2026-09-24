@@ -9,7 +9,9 @@ import dev.qiqi.dataagent.observability.RunTraceStore;
 import io.agentscope.core.event.*;
 import io.agentscope.core.message.ToolResultState;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import reactor.core.publisher.Flux;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -18,6 +20,12 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class ChatProjectionTest {
+    @TempDir Path dir;
+    private dev.qiqi.dataagent.plan.AnalysisPlanGate plans() {
+        return new dev.qiqi.dataagent.plan.AnalysisPlanGate(
+                new dev.qiqi.dataagent.storage.LocalWorkspace(new dev.qiqi.dataagent.storage.StorageProperties(dir), new ObjectMapper()),
+                new ObjectMapper());
+    }
     private final DataAgentService agent = mock(DataAgentService.class);
     private final RunTraceStore store = new RunTraceStore();
     ChatController controller(Duration timeout) {
@@ -25,7 +33,7 @@ class ChatProjectionTest {
         when(identities.findActiveByUsername("admin")).thenReturn(Optional.of(new UserIdentity(1, "admin", "Admin", "ALL", null)));
         when(agent.modelConfigured()).thenReturn(true);
         return new ChatController(agent, identities, new AgentEventMapper(new ObjectMapper()), new ChartProperties(false, java.net.URI.create("http://localhost:3033/mcp"), Duration.ofSeconds(30)),
-                new WebSearchProperties(false, "", Duration.ofSeconds(15)), store, new RunCoordinator(), timeout);
+                new WebSearchProperties(false, "", Duration.ofSeconds(15)), store, new RunCoordinator(), plans(), timeout);
     }
     @Test void controllerPublishesOnlySafeToolProjectionAndPreservesOwnerScopedJournal() {
         when(agent.stream(anyString(), anyString(), any(), anyBoolean(), any())).thenReturn(Flux.just(
@@ -67,7 +75,7 @@ class ChatProjectionTest {
                 new TextBlockDeltaEvent("r", "answer", "公开结论"), new AgentEndEvent("r")));
         var events = new ChatController(agent, identities, new AgentEventMapper(new ObjectMapper()),
                 new ChartProperties(false, java.net.URI.create("http://localhost:3033/mcp"), Duration.ofSeconds(30)),
-                new WebSearchProperties(false, "", Duration.ofSeconds(15)), failing, new RunCoordinator(), Duration.ofSeconds(5))
+                new WebSearchProperties(false, "", Duration.ofSeconds(15)), failing, new RunCoordinator(), plans(), Duration.ofSeconds(5))
                 .stream("admin", new ChatRequest("test", "session", false))
                 .map(sse -> sse.data()).collectList().block(Duration.ofSeconds(10));
         assertThat(events).extracting(StreamEvent::type).contains("RUN_END").doesNotContain("ERROR");
@@ -86,5 +94,43 @@ class ChatProjectionTest {
         var end = (dev.qiqi.dataagent.observability.RunTrace.Snapshot) events.getLast().data().get("run");
         assertThat(end.status()).isEqualTo("FAILED");
         assertThat(store.execution(end.runId(), 1).status()).isEqualTo("FAILED");
+    }
+    @Test void planPauseIsAwaitingConfirmationAndPlainTextIsARevision() {
+        var confirm = new RequireUserConfirmEvent("reply", List.of(io.agentscope.core.message.ToolUseBlock.builder()
+                .id("call-1").name("submit_analysis_plan")
+                .input(Map.of("title", "分析租赁", "metrics", List.of("订单数"), "tables", List.of("rental"),
+                        "sections", List.of(Map.of("title", "规模", "items", List.of("订单数"))),
+                        "deliverables", List.of(Map.of("title", "报告", "detail", "关键数字"))))
+                .build()));
+        when(agent.stream(anyString(), eq("plan-session"), any(), anyBoolean(), any())).thenReturn(Flux.just(confirm));
+        var first = controller(Duration.ofSeconds(5)).stream("admin", new ChatRequest("分析租赁", "plan-session", false))
+                .map(sse -> sse.data()).collectList().block(Duration.ofSeconds(10));
+        assertThat(first).extracting(StreamEvent::type).contains("PLAN_CARD", "RUN_END");
+        var end = (dev.qiqi.dataagent.observability.RunTrace.Snapshot) first.getLast().data().get("run");
+        assertThat(end.status()).isEqualTo("AWAITING_CONFIRMATION");
+        assertThat(store.execution(end.runId(), 1).status()).isEqualTo("AWAITING_CONFIRMATION");
+        var rewritten = new RequireUserConfirmEvent("reply-2", List.of(io.agentscope.core.message.ToolUseBlock.builder()
+                .id("call-2").name("submit_analysis_plan")
+                .input(Map.of("title", "只要订单数", "metrics", List.of("订单数"), "tables", List.of("rental"),
+                        "sections", List.of(Map.of("title", "规模", "items", List.of("订单数"))),
+                        "deliverables", List.of(Map.of("title", "报告", "detail", "只保留订单数"))))
+                .build()));
+        when(agent.stream(any(io.agentscope.core.message.Msg.class), eq("plan-session"), any(), anyBoolean(), any()))
+                .thenReturn(Flux.just(rewritten));
+        var second = controller(Duration.ofSeconds(5)).stream("admin", new ChatRequest("只要订单数", "plan-session", false))
+                .map(sse -> sse.data()).collectList().block(Duration.ofSeconds(10));
+        assertThat(second).extracting(StreamEvent::type).contains("PLAN_CARD");
+        assertThat(second.stream().filter(event -> event.type().equals("PLAN_CARD")).findFirst().orElseThrow().data())
+                .containsEntry("toolCallId", "call-2").containsEntry("title", "只要订单数");
+        var sent = org.mockito.ArgumentCaptor.forClass(io.agentscope.core.message.Msg.class);
+        verify(agent).stream(sent.capture(), eq("plan-session"), any(), anyBoolean(), any());
+        var results = (List<?>) sent.getValue().getMetadata().get(io.agentscope.core.message.Msg.METADATA_CONFIRM_RESULTS);
+        var decision = (ConfirmResult) results.getFirst();
+        assertThat(decision.isConfirmed()).isTrue();
+        assertThat(decision.getToolCall().getInput()).containsEntry("userFeedback", "只要订单数");
+        var gate = plans();
+        var sessionId = dev.qiqi.dataagent.storage.LocalWorkspace.key("plan-session");
+        assertThat(gate.isRoundOpen("1", sessionId)).isFalse();
+        assertThat(gate.pending("1", sessionId).id()).isEqualTo("call-2");
     }
 }

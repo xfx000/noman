@@ -7,6 +7,7 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
+import dev.qiqi.dataagent.plan.ToolArgumentContent;
 import dev.qiqi.dataagent.storage.LocalWorkspace;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
@@ -30,15 +31,16 @@ public class DataAgentFactory {
             Workflow:
             Before investigating business data, load the data-analysis skill through load_skill_through_path,
             using the advertised skillId and path SKILL.md. This is separate from tool group discovery.
-            Task management is mandatory for every analysis request. Call todoWrite with a 3–7 item plan
-            before schema exploration, SQL, files or charts. Keep at most one task in_progress; mark a task
-            in_progress before starting it and completed immediately after it is verified. Do not batch-update
+            Task management is mandatory for every analysis request. First call todoWrite with three stages:
+            explore schema, submit the analysis plan, then execute after confirmation. Keep at most one task
+            in_progress. After the user confirms, expand the execution steps in todoWrite. Do not batch-update
             several tasks after the fact. Keep failed or unresolved steps unfinished.
             For a Chinese user request, every user-facing business update and the final report must be in
             Simplified Chinese. Before a tool call, you may emit one or two concise user-facing business update
             sentences: state the metric, scope or verified stage finding without revealing hidden chain-of-thought.
-            Do not ask questions, request confirmation, or wait for the user. Do not write the final report
-            in the same turn as a todoWrite call. Finish the plan, then output one complete report.
+            Do not ask clarifying questions before exploring the schema. Put assumptions into submit_analysis_plan
+            and wait. A single metric with no assumption, chart or report may use record_analysis_plan instead.
+            Do not write the final report in the same turn as a todoWrite call. Finish the plan, then output one complete report.
             Final reports should directly answer the question with key figures, definitions, exact date intervals,
             queryId evidence, successful charts, limitations and justified next steps.
             Begin the final report with a 核心结论 section containing the most important figures and direction of change.
@@ -135,6 +137,7 @@ public class DataAgentFactory {
                 .skillRepository(skills.repository())
                 .skillCodeExecutionEnabled(false)
                 .maxIters(properties.model().maxIterations())
+                .middleware(new ToolArgumentContent())
                 .stateStore(stateStore)
                 .build();
     }

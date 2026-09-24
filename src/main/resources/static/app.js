@@ -34,6 +34,8 @@ const toolNames = {
   reset_equipped_tools: "发现并加载工具",
   web_search: "搜索公开资料",
   analyze_file: "分析上传文件",
+  submit_analysis_plan: "提交分析计划",
+  record_analysis_plan: "记录分析计划",
 };
 let toastTimer;
 
@@ -809,6 +811,8 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
   actions.hidden = true;
   const summary = element("span");
   const steps = { children: [] };
+  const planHost = element("section", "plan-card-host");
+  planHost.hidden = true;
   const response = {
     card,
     report: finalResult,
@@ -826,6 +830,7 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     summary,
     steps,
     todoArea,
+    planHost,
     executionDetails,
     executionSummary,
     executionWarnings,
@@ -881,7 +886,7 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
   });
   actions.append(copyButton, exportButton);
   finalResult.append(actions);
-  card.append(heading, analysisProgress, analysisNarrative, finalResult,
+  card.append(heading, planHost, analysisProgress, analysisNarrative, finalResult,
     executionDetails, error, diagnosticsArea);
   messages.append(card);
   return response;
@@ -1257,6 +1262,11 @@ function applyExecution(response, execution, restore = false) {
   }
   for (const chart of execution.charts || []) addChart(response, chart);
   for (const source of execution.sources || []) addWebSource(response, source);
+  if (execution.analysisPlan && execution.status === "AWAITING_CONFIRMATION") {
+    response.pendingPlan = execution.analysisPlan;
+    response.awaitingPlan = true;
+    renderPlanCard(response, execution.analysisPlan);
+  }
   if (execution.status === "RUNNING") response.progress.textContent = execution.progress || "正在分析…";
   else response.progress.classList.remove("busy");
   if (restore) {
@@ -1268,7 +1278,8 @@ function applyExecution(response, execution, restore = false) {
       response.restoredComplete = true;
       render(response);
     }
-    response.progress.textContent = execution.progress;
+    response.progress.textContent = execution.status === "AWAITING_CONFIRMATION"
+      ? "我将在你确认以后继续" : execution.progress;
     response.actions.hidden = !response.restoredComplete;
     if (["FAILED"].includes(execution.status)) {
       setNotice(response, execution.errorCode === "MAX_ITERATIONS"
@@ -1312,8 +1323,14 @@ function handleEvent(event, response) {
     case "RUN_START":
       showDiagnostics(response, data.run);
       break;
+    case "PLAN_CARD":
+      response.pendingPlan = data;
+      response.awaitingPlan = true;
+      renderPlanCard(response, data);
+      break;
     case "RUN_END":
       response.runEnded = true;
+      if (data.run?.status === "AWAITING_CONFIRMATION") response.awaitingPlan = true;
       showDiagnostics(response, data.run);
       response.done = true;
       if (data.run?.status === "FAILED" || data.run?.status === "CANCELLED") {
@@ -1422,7 +1439,99 @@ async function consumeStream(body, response) {
     reader.releaseLock();
   }
 }
+function renderPlanCard(response, plan) {
+  if (!response.planHost || !plan) return;
+  state.planResponse = response;
+  response.planHost.hidden = false;
+  response.planHost.replaceChildren();
+  response.planHost.append(element("h3", "plan-card-title", plan.title || "分析计划"));
+  const sections = element("ol", "plan-sections");
+  for (const section of plan.sections || []) {
+    const item = element("li", "plan-section");
+    item.append(element("strong", "", section.title || ""));
+    const points = element("ul", "plan-points");
+    for (const point of section.items || []) points.append(element("li", "", point));
+    item.append(points);
+    sections.append(item);
+  }
+  response.planHost.append(sections);
+  const outputs = element("div", "plan-outputs");
+  outputs.append(element("h4", "", "最终输出"));
+  for (const output of plan.deliverables || []) {
+    const row = element("div", "plan-output");
+    row.append(element("strong", "", output.title || ""), element("span", "", output.detail || ""));
+    outputs.append(row);
+  }
+  response.planHost.append(outputs);
+  const actions = element("div", "plan-actions");
+  const revise = element("button", "plan-revise", "修改任务");
+  revise.type = "button";
+  const start = element("button", "plan-start", "开始任务");
+  start.type = "button";
+  const editor = element("textarea", "plan-editor");
+  editor.hidden = true;
+  editor.placeholder = "说明要改的范围，例如只要行业、不要地图";
+  const sendRevision = element("button", "plan-revise", "提交修改");
+  sendRevision.type = "button";
+  sendRevision.hidden = true;
+  revise.addEventListener("click", () => {
+    editor.hidden = false;
+    sendRevision.hidden = false;
+    editor.focus();
+  });
+  sendRevision.addEventListener("click", () => continuePlan(response, false, editor.value.trim()));
+  start.addEventListener("click", () => continuePlan(response, true, ""));
+  actions.append(revise, start);
+  response.planHost.append(actions, editor, sendRevision);
+  response.progress.textContent = "我将在你确认以后继续";
+}
+async function continuePlan(response, confirmed, feedback) {
+  if (!response?.pendingPlan || currentRun()) return;
+  if (!confirmed && !feedback) return;
+  const chat = activeChat();
+  const controller = new AbortController();
+  response.awaitingPlan = false;
+  response.done = false;
+  response.runEnded = false;
+  response.pending = true;
+  if (confirmed && response.planHost) response.planHost.hidden = true;
+  response.progress.classList.add("busy");
+  response.progress.textContent = confirmed ? "正在按计划查数…" : "正在按修改意见重写计划…";
+  state.runs.set(chat.id, { controller, response });
+  refreshControls();
+  try {
+    const result = await request("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Qiqi-User": user.value },
+      body: JSON.stringify({
+        query: confirmed ? "开始任务" : feedback,
+        conversationId: response.conversationId,
+        online: false,
+        plan: { toolCallId: response.pendingPlan.toolCallId, confirmed, feedback },
+      }),
+      signal: controller.signal,
+    });
+    if (!result.ok) throw new Error(`请求失败（${result.status}）`);
+    if (confirmed) response.planHost.hidden = true;
+    await consumeStream(result.body, response);
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      response.failed = true;
+      response.error.hidden = false;
+      response.error.textContent = error.message || "连接失败，请稍后重试。";
+    }
+  } finally {
+    state.runs.delete(chat.id);
+    response.progress.classList.remove("busy");
+    if (response.awaitingPlan) response.progress.textContent = "我将在你确认以后继续";
+    else if (!response.failed) response.progress.textContent = "分析完成";
+    refreshControls();
+  }
+}
 async function send(query) {
+  if (state.planResponse?.awaitingPlan && state.planResponse.card?.isConnected) {
+    return continuePlan(state.planResponse, false, query.trim());
+  }
   if (currentRun() || !state.configured || state.historyLoading || !query.trim()) return;
   if (state.attachment?.conversationId === state.conversationId) {
     query += `\n\n已上传 CSV：${state.attachment.name}；fileId=${state.attachment.fileId}。请先用 analyze_file 预览，统计使用完整文件。`;
@@ -1492,7 +1601,7 @@ async function send(query) {
       throw new Error(detail || `请求失败（${result.status}），请稍后重试。`);
     }
     await consumeStream(result.body, response);
-    if ((!response.done || (response.diagnostics && !response.runEnded)) && !response.failed)
+    if (!response.awaitingPlan && (!response.done || (response.diagnostics && !response.runEnded)) && !response.failed)
       throw new Error("连接已中断，回答可能不完整。请重新提问。");
   } catch (error) {
     if (error.name === "AbortError") stopped = true;
@@ -1511,11 +1620,13 @@ async function send(query) {
       ? "已停止 · 已保留生成内容"
       : response.failed
         ? "本次分析未完成"
-        : "分析完成";
+        : response.awaitingPlan
+          ? "我将在你确认以后继续"
+          : "分析完成";
     response.summary.textContent = `分析过程 · ${response.tools.size} 次工具调用${stopped || response.failed ? " · 已中断" : ""}`;
     response.actions.hidden = !response.text;
     state.runs.delete(chat.id);
-    if (response.failed || stopped) {
+    if ((response.failed || stopped) && !response.awaitingPlan) {
       // A cancelled server turn may still be unwinding. Use a fresh state slot.
       if (!state.workspaceEnabled) chat.runtimeId = crypto.randomUUID();
       if (state.activeId === chat.id) state.conversationId = chat.runtimeId;

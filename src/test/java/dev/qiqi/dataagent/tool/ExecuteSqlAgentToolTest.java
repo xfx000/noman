@@ -27,7 +27,13 @@ class ExecuteSqlAgentToolTest {
         when(identities.findActiveById("1")).thenReturn(Optional.of(new UserIdentity(1, "admin", "Admin", "ALL", null)));
         when(queries.execute(eq("SELECT 1"), any(), eq("s"), any()))
                 .thenThrow(new IllegalArgumentException("Table is not exposed to the agent: ghost"));
-        var result = new ExecuteSqlAgentTool(identities, queries, new ObjectMapper(), new ChartQueryStore())
+        var plans = new dev.qiqi.dataagent.plan.AnalysisPlanGate(
+                new dev.qiqi.dataagent.storage.LocalWorkspace(new dev.qiqi.dataagent.storage.StorageProperties(java.nio.file.Path.of("target", "plan-sql")), new ObjectMapper()),
+                new ObjectMapper());
+        plans.accept("1", "s", new dev.qiqi.dataagent.plan.AnalysisPlan(
+                java.util.List.of("订单数"), java.util.List.of(), "", java.util.List.of("sales_order"),
+                java.util.List.of(), java.util.List.of(), "", java.util.List.of(), java.util.List.of()));
+        var result = new ExecuteSqlAgentTool(identities, queries, new ObjectMapper(), new ChartQueryStore(), plans)
                 .callAsync(ToolCallParam.builder()
                         .input(Map.of("sql", "SELECT 1"))
                         .runtimeContext(RuntimeContext.builder().userId("1").sessionId("s").build())

@@ -15,6 +15,7 @@ public final class ExecutionJournal {
     private final Map<String, NarrationBuf> narrations = new LinkedHashMap<>();
     private final List<Step> steps = new ArrayList<>();
     private String status = "RUNNING", errorCode, progress = "正在准备分析", text = "", replyId, finalNarrationId;
+    private JsonNode analysisPlan;
     private long revision;
     private boolean truncated;
 
@@ -35,6 +36,12 @@ public final class ExecutionJournal {
             appendNarration("text:" + nextReply, "text", string(data.get("delta")));
             progress = "正在整理分析进展";
             revision++; return;
+        }
+        if (type.equals("PLAN_CARD")) {
+            analysisPlan = DisplaySanitizer.clean(data);
+            progress = "等待确认分析计划";
+            revision++;
+            return;
         }
         if (type.equals("AGENT_END")) {
             finalNarrationId = replyId == null ? null : "text:" + replyId;
@@ -108,7 +115,9 @@ public final class ExecutionJournal {
         }
         progress = code != null && code.equals("MAX_ITERATIONS") ? "达到分析轮数上限，可继续完成剩余计划"
                 : terminal.equals("SUCCEEDED") ? "分析完成" : terminal.equals("PARTIAL") ? "分析结束，部分工具未成功"
-                : terminal.equals("CANCELLED") ? "分析已停止，已保留进度" : "分析未完成，已保留证据与计划";
+                : terminal.equals("CANCELLED") ? "分析已停止，已保留进度"
+                : terminal.equals("AWAITING_CONFIRMATION") ? "等待确认分析计划"
+                : "分析未完成，已保留证据与计划";
         revision++;
     }
     public synchronized Snapshot snapshot() {
@@ -117,7 +126,7 @@ public final class ExecutionJournal {
                         c.arguments, c.result, c.ended ? c.durationMs : elapsed(c.started))).toList(),
                 todos, List.copyOf(evidence.values()), List.copyOf(charts.values()), List.copyOf(sources.values()), truncated,
                 narrations.values().stream().map(n -> new Narration(n.id, n.kind, DisplaySanitizer.text(n.content))).toList(),
-                List.copyOf(steps), finalNarrationId);
+                List.copyOf(steps), finalNarrationId, analysisPlan);
     }
     public synchronized boolean hasUnfinishedPlan() {
         return todos.stream().anyMatch(todo -> !todo.path("status").asText().equals("completed"));
@@ -142,7 +151,7 @@ public final class ExecutionJournal {
                 saved.tools.stream().map(t -> Set.of("QUEUED", "RUNNING").contains(t.status)
                         ? new ToolView(t.id, t.name, "INCOMPLETE", t.arguments, "服务重启，未收到完整结果", t.durationMs) : t).toList(),
                 saved.todos, saved.evidence, saved.charts, saved.sources, saved.truncated, saved.narrations, saved.steps,
-                saved.finalNarrationId);
+                saved.finalNarrationId, saved.analysisPlan);
     }
     private void appendNarration(String id, String kind, String delta) {
         if (id.length() > 220) return;
@@ -200,7 +209,7 @@ public final class ExecutionJournal {
     public record Snapshot(int version, String runId, String conversationId, long revision, String status, String errorCode,
                            String progress, String text, List<ToolView> tools, List<JsonNode> todos,
                            List<JsonNode> evidence, List<JsonNode> charts, List<JsonNode> sources, boolean truncated,
-                           List<Narration> narrations, List<Step> steps, String finalNarrationId) {
+                           List<Narration> narrations, List<Step> steps, String finalNarrationId, JsonNode analysisPlan) {
         public Snapshot {
             narrations = narrations == null ? List.of() : List.copyOf(narrations);
             steps = steps == null ? List.of() : List.copyOf(steps);

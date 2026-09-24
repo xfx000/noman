@@ -3,6 +3,8 @@ package dev.qiqi.dataagent.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.qiqi.dataagent.identity.IdentityService;
+import dev.qiqi.dataagent.plan.AnalysisPlanGate;
+import dev.qiqi.dataagent.plan.PlanExecutionGuard;
 import dev.qiqi.dataagent.identity.UserIdentity;
 import dev.qiqi.dataagent.query.ReadOnlyQueryService;
 import dev.qiqi.dataagent.chart.ChartQueryStore;
@@ -36,12 +38,14 @@ public class ExecuteSqlAgentTool implements AgentTool {
     private final ReadOnlyQueryService queries;
     private final ObjectMapper mapper;
     private final ChartQueryStore chartQueries;
+    private final AnalysisPlanGate plans;
 
-    public ExecuteSqlAgentTool(IdentityService identities, ReadOnlyQueryService queries, ObjectMapper mapper, ChartQueryStore chartQueries) {
+    public ExecuteSqlAgentTool(IdentityService identities, ReadOnlyQueryService queries, ObjectMapper mapper, ChartQueryStore chartQueries, AnalysisPlanGate plans) {
         this.identities = identities;
         this.queries = queries;
         this.mapper = mapper;
         this.chartQueries = chartQueries;
+        this.plans = plans;
     }
 
     @Override public String getName() { return "execute_sql"; }
@@ -64,6 +68,8 @@ public class ExecuteSqlAgentTool implements AgentTool {
         if (context == null || context.getUserId() == null || context.getSessionId() == null) {
             throw new SecurityException("Authenticated user and conversation are required");
         }
+        var blocked = PlanExecutionGuard.block(context, plans);
+        if (blocked != null) return blocked;
 
         // 不直接相信上下文中的字符串：重新查询有效用户，并再次检查该用户是否允许查数。
         UserIdentity identity = identities.findActiveById(context.getUserId())

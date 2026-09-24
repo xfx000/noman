@@ -2,6 +2,8 @@ package dev.qiqi.dataagent.tool;
 
 import dev.qiqi.dataagent.chart.GenerateChartTool;
 import dev.qiqi.dataagent.network.WebSearchTool;
+import dev.qiqi.dataagent.plan.RecordAnalysisPlanTool;
+import dev.qiqi.dataagent.plan.SubmitAnalysisPlanTool;
 import io.agentscope.core.tool.Toolkit;
 import org.springframework.stereotype.Component;
 
@@ -10,17 +12,27 @@ import org.springframework.stereotype.Component;
 public class DataAgentToolkit {
     private final CatalogTools catalog;
     private final SqlTools sql;
+    private final ValidateSqlAgentTool validate;
     private final ExecuteSqlAgentTool execute;
+    private final SubmitAnalysisPlanTool submitPlan;
+    private final RecordAnalysisPlanTool recordPlan;
     private final GenerateChartTool charts;
     private final WebSearchTool web;
     private final dev.qiqi.dataagent.files.AnalyzeFileTool files;
-    public DataAgentToolkit(CatalogTools catalog, SqlTools sql, ExecuteSqlAgentTool execute, GenerateChartTool charts, WebSearchTool web, dev.qiqi.dataagent.files.AnalyzeFileTool files) {
-        this.catalog = catalog; this.sql = sql; this.execute = execute; this.charts = charts; this.web = web; this.files = files;
+    public DataAgentToolkit(CatalogTools catalog, SqlTools sql, ValidateSqlAgentTool validate, ExecuteSqlAgentTool execute,
+                             SubmitAnalysisPlanTool submitPlan, RecordAnalysisPlanTool recordPlan,
+                             GenerateChartTool charts, WebSearchTool web, dev.qiqi.dataagent.files.AnalyzeFileTool files) {
+        this.catalog = catalog; this.sql = sql; this.validate = validate; this.execute = execute;
+        this.submitPlan = submitPlan; this.recordPlan = recordPlan;
+        this.charts = charts; this.web = web; this.files = files;
     }
     public Toolkit create(boolean online) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(catalog);
         toolkit.registerTool(sql);
+        toolkit.registerAgentTool(validate);
+        toolkit.registerAgentTool(submitPlan);
+        toolkit.registerAgentTool(recordPlan);
         toolkit.registerAgentTool(execute);
         toolkit.registerAgentTool(new TodoWriteAgentTool());
         if (charts.enabled()) {

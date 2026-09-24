@@ -2,6 +2,8 @@ package dev.qiqi.dataagent.files;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.qiqi.dataagent.chart.ChartQueryStore;
+import dev.qiqi.dataagent.plan.AnalysisPlanGate;
+import dev.qiqi.dataagent.plan.PlanExecutionGuard;
 import dev.qiqi.dataagent.identity.IdentityService;
 import dev.qiqi.dataagent.identity.UserIdentity;
 import io.agentscope.core.tool.*;
@@ -15,8 +17,9 @@ import java.util.Map;
 @Component
 public class AnalyzeFileTool implements AgentTool {
     private final CsvFiles files; private final ChartQueryStore evidence; private final IdentityService identities; private final ObjectMapper json;
-    public AnalyzeFileTool(CsvFiles files, ChartQueryStore evidence, IdentityService identities, ObjectMapper json) {
-        this.files = files; this.evidence = evidence; this.identities = identities; this.json = json;
+    private final AnalysisPlanGate plans;
+    public AnalyzeFileTool(CsvFiles files, ChartQueryStore evidence, IdentityService identities, ObjectMapper json, AnalysisPlanGate plans) {
+        this.files = files; this.evidence = evidence; this.identities = identities; this.json = json; this.plans = plans;
     }
     public String getName() { return "analyze_file"; }
     public boolean isReadOnly() { return true; }
@@ -32,6 +35,8 @@ public class AnalyzeFileTool implements AgentTool {
         return Mono.fromCallable(() -> {
             var ctx = param.getRuntimeContext();
             if (ctx == null || ctx.getUserId() == null || ctx.getSessionId() == null) throw new SecurityException("缺少身份或会话。");
+            var blocked = PlanExecutionGuard.block(ctx, plans);
+            if (blocked != null) return blocked;
             identities.findActiveById(ctx.getUserId()).filter(UserIdentity::canQuery).orElseThrow(() -> new SecurityException("当前用户无法分析文件。"));
             var input = param.getInput();
             var table = files.require(ctx.getUserId(), ctx.getSessionId(), text(input, "fileId"));

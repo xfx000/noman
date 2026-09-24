@@ -80,6 +80,11 @@ public final class RunTrace {
     public synchronized void fail(String code) { if (running()) { errorCode = code; finish("FAILED"); } }
     public synchronized void cancel() { cancel("CLIENT_DISCONNECTED"); }
     public synchronized void cancel(String code) { if (running()) { errorCode = code; finish("CANCELLED"); } }
+    public synchronized void awaitConfirmation() {
+        if (!running()) return;
+        errorCode = null;
+        finish("AWAITING_CONFIRMATION");
+    }
     public synchronized void complete() {
         if (!running()) return;
         if (errorCode != null) finish(errorCode.equals("STOP_REQUESTED") ? "CANCELLED" : "INCOMPLETE");

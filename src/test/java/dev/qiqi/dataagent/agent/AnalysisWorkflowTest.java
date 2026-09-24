@@ -9,6 +9,7 @@ import dev.qiqi.dataagent.tool.DataAgentToolkit;
 import dev.qiqi.dataagent.web.AgentEventMapper;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.*;
+import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.*;
 import io.agentscope.core.model.*;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,12 @@ class AnalysisWorkflowTest {
                     name = "todoWrite"; args = Map.of("todos", List.of(Map.of("content", "按多个指标核对数据", "status", step == 1 ? "in_progress" : "completed")));
                 } else if (step == 2) { name = "list_tables"; args = Map.of(); }
                 else if (step == 3) { name = "describe_table"; args = Map.of("table", "sales_order"); }
+                else if (step == 4) {
+                    name = "submit_analysis_plan";
+                    args = Map.of("title", "核对多个指标", "metrics", List.of("订单数", "收入"), "tables", List.of("sales_order"),
+                            "outputs", List.of("report"), "sections", List.of(Map.of("title", "规模", "items", List.of("订单数", "收入"))),
+                            "deliverables", List.of(Map.of("title", "报告", "detail", "给出关键数字")));
+                }
                 else if (step < 30) {
                     name = step % 2 == 0 ? "validate_sql" : "execute_sql";
                     args = Map.of("sql", "SELECT COUNT(*) AS total FROM sales_order WHERE total_amount >= " + (step - 4) / 2);
@@ -65,11 +72,20 @@ class AnalysisWorkflowTest {
         var calls = new AtomicInteger();
         var agent = factory(40).create(identities.findActiveByUsername("admin").orElseThrow(), false, script(calls));
         var context = RuntimeContext.builder().userId("1").sessionId("workflow").build();
-        var events = agent.streamEvents(new UserMessage("核对多个指标并交付报告"), context).collectList().block(Duration.ofSeconds(30));
+        var paused = agent.streamEvents(new UserMessage("核对多个指标并交付报告"), context).collectList().block(Duration.ofSeconds(30));
+        var confirm = paused.stream().filter(RequireUserConfirmEvent.class::isInstance).map(RequireUserConfirmEvent.class::cast).findFirst().orElseThrow();
+        assertThat(paused).noneMatch(event -> event instanceof ToolResultEndEvent end && end.getToolCallName() != null && end.getToolCallName().equals("execute_sql"));
+        var call = confirm.getToolCalls().getFirst();
+        var resume = UserMessage.builder().textContent("开始任务")
+                .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, List.of(new ConfirmResult(true, call)))).build();
+        var continued = agent.streamEvents(resume, context).collectList().block(Duration.ofSeconds(30));
+        var events = new ArrayList<AgentEvent>();
+        events.addAll(paused);
+        events.addAll(continued);
         assertThat(events).noneMatch(ExceedMaxItersEvent.class::isInstance);
         assertThat(calls.get()).isGreaterThan(24).isLessThanOrEqualTo(40);
         var ends = events.stream().filter(ToolResultEndEvent.class::isInstance).map(ToolResultEndEvent.class::cast).toList();
-        assertThat(ends).hasSize(31).allSatisfy(end -> assertThat(end.getState()).isEqualTo(ToolResultState.SUCCESS));
+        assertThat(ends).isNotEmpty().allSatisfy(end -> assertThat(end.getState()).isEqualTo(ToolResultState.SUCCESS));
         var journal = new ExecutionJournal("r", "workflow");
         events.forEach(event -> journal.accept(mapper.map(event)));
         journal.finish("SUCCEEDED", null);

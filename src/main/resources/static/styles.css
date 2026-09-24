@@ -2666,3 +2666,27 @@ input:focus-visible {
     align-items: flex-start;
   }
 }
+.plan-card-host {
+  margin: 12px 0 16px;
+  padding: 16px 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+}
+.plan-card-title { margin: 0 0 12px; font-size: 16px; }
+.plan-sections { margin: 0; padding-left: 1.2rem; }
+.plan-section { margin: 10px 0; }
+.plan-points { margin: 6px 0 0; padding-left: 1.1rem; color: #4d524c; }
+.plan-outputs { margin-top: 14px; }
+.plan-outputs h4 { margin: 0 0 8px; font-size: 14px; }
+.plan-output { display: flex; gap: 8px; margin: 6px 0; }
+.plan-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.plan-revise, .plan-start {
+  border-radius: 999px;
+  padding: 8px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+.plan-revise { background: #fff; border: 1px solid #d7d9d4; }
+.plan-start { background: #1f2320; color: #fff; border: 0; }
+.plan-editor { width: 100%; min-height: 72px; margin-top: 10px; }
