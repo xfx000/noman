@@ -2,7 +2,10 @@ package dev.qiqi.dataagent.files;
 
 import dev.qiqi.dataagent.storage.LocalWorkspace;
 import dev.qiqi.dataagent.query.QueryResult;
+import org.apache.poi.ss.usermodel.*;
 import org.springframework.stereotype.Component;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.util.*;
@@ -18,10 +21,50 @@ public class CsvFiles {
             throw new IllegalArgumentException("CSV 文件不能超过 2 MB。");
         List<List<String>> records = parse(content.startsWith("\uFEFF") ? content.substring(1) : content);
         if (records.size() < 2) throw new IllegalArgumentException("CSV 需要表头和至少一行数据。");
+        return save(owner, session, name, records, "CSV");
+    }
+    public Table uploadWorkbook(String owner, String session, String name, byte[] bytes) {
+        if (name == null || name.length() > 120 || !name.toLowerCase(Locale.ROOT).matches(".*\\.(xlsx|xls)"))
+            throw new IllegalArgumentException("仅支持 .xlsx 或 .xls 文件，文件名最长 120 字符。");
+        if (bytes == null || bytes.length == 0 || bytes.length > 2 * 1024 * 1024)
+            throw new IllegalArgumentException("Excel 文件不能为空且不能超过 2 MB。");
+        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
+            Sheet sheet = null;
+            for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+                if (!workbook.isSheetHidden(i) && !workbook.isSheetVeryHidden(i)) { sheet = workbook.getSheetAt(i); break; }
+            }
+            if (sheet == null) throw new IllegalArgumentException("Excel 没有可读取的工作表。");
+            if (sheet.getLastRowNum() > 5000) throw new IllegalArgumentException("Excel 最多 5000 行数据。");
+            DataFormatter formatter = new DataFormatter(Locale.ROOT);
+            List<List<String>> records = new ArrayList<>();
+            int width = -1;
+            for (int rowIndex = sheet.getFirstRowNum(); rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null || row.getLastCellNum() < 0) continue;
+                int lastCell = row.getLastCellNum();
+                if (lastCell > 50) throw new IllegalArgumentException("Excel 最多 50 列。");
+                if (width < 0) width = lastCell;
+                if (lastCell > width) throw new IllegalArgumentException("Excel 每行的列数必须与表头一致。");
+                List<String> cells = new ArrayList<>();
+                for (int column = 0; column < width; column++) {
+                    Cell cell = row.getCell(column, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
+                    String value = cell == null ? "" : formatter.formatCellValue(cell);
+                    if (value.length() > 10000) throw new IllegalArgumentException("Excel 单元格不能超过 10000 字符。");
+                    cells.add(value);
+                }
+                records.add(List.copyOf(cells));
+                if (records.size() > 5001) throw new IllegalArgumentException("Excel 最多 5000 行数据。");
+            }
+            return save(owner, session, name, records, "Excel");
+        } catch (IllegalArgumentException e) { throw e;
+        } catch (IOException | RuntimeException e) { throw new IllegalArgumentException("Excel 文件无法读取或格式不正确。", e); }
+    }
+    private Table save(String owner, String session, String name, List<List<String>> records, String format) {
+        if (records.size() < 2) throw new IllegalArgumentException(format + " 需要表头和至少一行数据。");
         List<String> columns = records.removeFirst().stream().map(String::trim).toList();
         if (columns.stream().anyMatch(c -> c.isBlank() || c.length() > 80) || new HashSet<>(columns).size() != columns.size())
             throw new IllegalArgumentException("列名必须非空、不重复且不超过 80 字符。");
-        if (records.stream().anyMatch(row -> row.size() != columns.size())) throw new IllegalArgumentException("CSV 每行的列数必须与表头一致。");
+        if (records.stream().anyMatch(row -> row.size() != columns.size())) throw new IllegalArgumentException(format + " 每行的列数必须与表头一致。");
         Table table = new Table(UUID.randomUUID().toString(), name, session, columns, List.copyOf(records));
         workspace.write(owner, "files", table.id(), table);
         return table;
@@ -29,6 +72,12 @@ public class CsvFiles {
     public Table require(String owner, String session, String id) {
         return workspace.read(owner, "files", id, Table.class).filter(table -> table.session().equals(session))
                 .orElseThrow(() -> new IllegalArgumentException("文件不存在或不属于当前会话。"));
+    }
+    public List<FileSummary> list(String owner, String session) {
+        return workspace.list(owner, "files", Table.class).stream()
+                .filter(table -> session.equals(table.session()))
+                .map(table -> new FileSummary(table.id(), table.name(), table.columns(), table.rows().size()))
+                .sorted(Comparator.comparing(FileSummary::name)).toList();
     }
     public QueryResult analyze(Table table, String operation, String valueColumn, String groupBy) {
         long start = System.nanoTime();
@@ -74,7 +123,7 @@ public class CsvFiles {
         return new BigDecimal(text);
     }
     private static QueryResult result(Table table, String operation, String valueColumn, String groupBy, List<String> columns, List<Map<String,Object>> rows, boolean truncated, long start) {
-        return new QueryResult(UUID.randomUUID().toString(), columns, rows, rows.size(), truncated, (System.nanoTime() - start) / 1_000_000, "", Map.of("type", "csv", "fileId", table.id(), "name", table.name(),
+        return new QueryResult(UUID.randomUUID().toString(), columns, rows, rows.size(), truncated, (System.nanoTime() - start) / 1_000_000, "", Map.of("type", table.name().toLowerCase(Locale.ROOT).endsWith(".csv") ? "csv" : "excel", "fileId", table.id(), "name", table.name(),
                 "operation", operation, "valueColumn", valueColumn == null ? "" : valueColumn, "groupBy", groupBy == null ? "" : groupBy, "totalRows", table.rows().size()));
     }
     static List<List<String>> parse(String text) {
@@ -111,4 +160,5 @@ public class CsvFiles {
         void add(BigDecimal value) { n++; sum = sum.add(value); min = min == null ? value : min.min(value); max = max == null ? value : max.max(value); }
     }
     public record Table(String id, String name, String session, List<String> columns, List<List<String>> rows) {}
+    public record FileSummary(String fileId, String name, List<String> columns, int totalRows) {}
 }

@@ -12,17 +12,16 @@ import org.springframework.stereotype.Component;
 public class DataAgentToolkit {
     private final CatalogTools catalog;
     private final SqlTools sql;
-    private final ValidateSqlAgentTool validate;
     private final ExecuteSqlAgentTool execute;
     private final SubmitAnalysisPlanTool submitPlan;
     private final RecordAnalysisPlanTool recordPlan;
     private final GenerateChartTool charts;
     private final WebSearchTool web;
     private final dev.qiqi.dataagent.files.AnalyzeFileTool files;
-    public DataAgentToolkit(CatalogTools catalog, SqlTools sql, ValidateSqlAgentTool validate, ExecuteSqlAgentTool execute,
+    public DataAgentToolkit(CatalogTools catalog, SqlTools sql, ExecuteSqlAgentTool execute,
                              SubmitAnalysisPlanTool submitPlan, RecordAnalysisPlanTool recordPlan,
                              GenerateChartTool charts, WebSearchTool web, dev.qiqi.dataagent.files.AnalyzeFileTool files) {
-        this.catalog = catalog; this.sql = sql; this.validate = validate; this.execute = execute;
+        this.catalog = catalog; this.sql = sql; this.execute = execute;
         this.submitPlan = submitPlan; this.recordPlan = recordPlan;
         this.charts = charts; this.web = web; this.files = files;
     }
@@ -30,7 +29,6 @@ public class DataAgentToolkit {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(catalog);
         toolkit.registerTool(sql);
-        toolkit.registerAgentTool(validate);
         toolkit.registerAgentTool(submitPlan);
         toolkit.registerAgentTool(recordPlan);
         toolkit.registerAgentTool(execute);
@@ -38,7 +36,7 @@ public class DataAgentToolkit {
         if (charts.enabled()) {
             toolkit.registerAgentTool(charts);
         }
-        toolkit.createToolGroup("files", "Preview uploaded CSV files and compute exact aggregates over all rows using a fileId.", false);
+        toolkit.createToolGroup("files", "Preview uploaded CSV/XLSX/XLS files and compute exact aggregates over all rows using a fileId.", false);
         toolkit.registration().agentTool(files).group("files").apply();
         if (online && web.enabled()) {
             toolkit.createToolGroup("web", "Search public web sources for current external context and cite URLs. User enabled online search for this turn.", false);

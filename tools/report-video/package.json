@@ -1,0 +1,9 @@
+{
+  "name": "qiqi-report-video-renderer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned local HyperFrames renderer for Qiqi report videos",
+  "dependencies": {
+    "hyperframes": "0.8.91"
+  }
+}

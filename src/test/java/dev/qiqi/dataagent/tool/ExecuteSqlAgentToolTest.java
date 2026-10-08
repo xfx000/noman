@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 import java.util.Optional;
+import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,5 +45,30 @@ class ExecuteSqlAgentToolTest {
                 .filter(TextBlock.class::isInstance).map(block -> ((TextBlock) block).getText())
                 .findFirst().orElse(result.toString());
         assertThat(text).contains("ghost");
+    }
+
+    @Test void databaseErrorExplainsMissingFunctionWithoutEchoingSqlLiterals() {
+        var identities = mock(IdentityService.class);
+        var queries = mock(ReadOnlyQueryService.class);
+        when(identities.findActiveById("1")).thenReturn(Optional.of(new UserIdentity(1, "admin", "Admin", "ALL", null)));
+        when(queries.execute(eq("SELECT secret FROM sales_order"), any(), eq("s"), any()))
+                .thenThrow(new org.springframework.jdbc.BadSqlGrammarException("query", "SELECT secret FROM sales_order",
+                        new SQLException("Function \"TO_CHAR\" not found; SQL statement: SELECT secret FROM sales_order", "90022")));
+        var plans = new dev.qiqi.dataagent.plan.AnalysisPlanGate(
+                new dev.qiqi.dataagent.storage.LocalWorkspace(new dev.qiqi.dataagent.storage.StorageProperties(java.nio.file.Path.of("target", "plan-sql")), new ObjectMapper()),
+                new ObjectMapper());
+        plans.accept("1", "s", new dev.qiqi.dataagent.plan.AnalysisPlan(
+                java.util.List.of("订单数"), java.util.List.of(), "", java.util.List.of("sales_order"),
+                java.util.List.of(), java.util.List.of(), "", java.util.List.of(), java.util.List.of()));
+        var result = new ExecuteSqlAgentTool(identities, queries, new ObjectMapper(), new ChartQueryStore(), plans)
+                .callAsync(ToolCallParam.builder()
+                        .input(Map.of("sql", "SELECT secret FROM sales_order"))
+                        .runtimeContext(RuntimeContext.builder().userId("1").sessionId("s").build())
+                        .build()).block();
+        assertThat(result.getState()).isEqualTo(ToolResultState.ERROR);
+        String text = result.getOutput().stream()
+                .filter(TextBlock.class::isInstance).map(block -> ((TextBlock) block).getText())
+                .findFirst().orElse(result.toString());
+        assertThat(text).contains("SQLState 90022", "function TO_CHAR not found").doesNotContain("secret");
     }
 }

@@ -91,7 +91,7 @@ public final class RunTrace {
         else if (!agentEnded || operations.values().stream().anyMatch(op -> op.durationMs == null)) {
             errorCode = "STREAM_INCOMPLETE"; finish("INCOMPLETE");
         } else {
-            execution.completeInProgressIfReported();
+            execution.completeInProgressIfReported(operations.values().stream().noneMatch(op -> op.status.equals("FAILED")));
             if (execution.hasUnfinishedPlan()) {
                 errorCode = "PLAN_INCOMPLETE"; finish("INCOMPLETE");
             } else finish(operations.values().stream().anyMatch(op -> op.status.equals("FAILED")) ? "PARTIAL" : "SUCCEEDED");

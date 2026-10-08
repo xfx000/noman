@@ -5,9 +5,11 @@ import dev.qiqi.dataagent.agent.*;
 import dev.qiqi.dataagent.chart.ChartProperties;
 import dev.qiqi.dataagent.identity.*;
 import dev.qiqi.dataagent.network.WebSearchProperties;
+import dev.qiqi.dataagent.plan.AnalysisMode;
 import dev.qiqi.dataagent.observability.RunTraceStore;
 import io.agentscope.core.event.*;
 import io.agentscope.core.message.ToolResultState;
+import io.agentscope.core.message.Msg;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import reactor.core.publisher.Flux;
@@ -29,14 +31,27 @@ class ChatProjectionTest {
     private final DataAgentService agent = mock(DataAgentService.class);
     private final RunTraceStore store = new RunTraceStore();
     ChatController controller(Duration timeout) {
+        return controller(timeout, mock(dev.qiqi.dataagent.agent.CreativeFeature.class));
+    }
+    ChatController controller(Duration timeout, dev.qiqi.dataagent.agent.CreativeFeature creative) {
         var identities = mock(IdentityService.class);
         when(identities.findActiveByUsername("admin")).thenReturn(Optional.of(new UserIdentity(1, "admin", "Admin", "ALL", null)));
         when(agent.modelConfigured()).thenReturn(true);
-        return new ChatController(agent, identities, new AgentEventMapper(new ObjectMapper()), new ChartProperties(false, java.net.URI.create("http://localhost:3033/mcp"), Duration.ofSeconds(30)),
+        return new ChatController(agent, creative, identities, new AgentEventMapper(new ObjectMapper()), new ChartProperties(false, java.net.URI.create("http://localhost:3033/mcp"), Duration.ofSeconds(30)),
                 new WebSearchProperties(false, "", Duration.ofSeconds(15)), store, new RunCoordinator(), plans(), timeout);
     }
+    @Test void explicitCreativeInvocationRequiresTheServerSideSetting() {
+        var creative = mock(dev.qiqi.dataagent.agent.CreativeFeature.class);
+        when(creative.invoked("/hyperframes 做片头")).thenReturn(true);
+        var subject = controller(Duration.ofSeconds(5), creative);
+        clearInvocations(agent);
+        assertThatThrownBy(() -> subject
+                .stream("admin", new ChatRequest("/hyperframes 做片头", "session", false)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("开启 HyperFrames");
+        verifyNoInteractions(agent);
+    }
     @Test void controllerPublishesOnlySafeToolProjectionAndPreservesOwnerScopedJournal() {
-        when(agent.stream(anyString(), anyString(), any(), anyBoolean(), any())).thenReturn(Flux.just(
+        when(agent.stream(any(Msg.class), anyString(), any(), anyBoolean(), eq(AnalysisMode.AUTO), any())).thenReturn(Flux.just(
                 new ThinkingBlockDeltaEvent("r", "b", "先核对已付款口径 token=private-credential"),
                 new ToolCallStartEvent("r", "call", "lookup"),
                 new ToolCallDeltaEvent("r", "call", "lookup", "{\"token\":\"private-credential\",\"query\":\"public\"}"),
@@ -71,9 +86,9 @@ class ChatProjectionTest {
         var identities = mock(IdentityService.class);
         when(identities.findActiveByUsername("admin")).thenReturn(Optional.of(new UserIdentity(1, "admin", "Admin", "ALL", null)));
         when(agent.modelConfigured()).thenReturn(true);
-        when(agent.stream(anyString(), anyString(), any(), anyBoolean(), any())).thenReturn(Flux.just(
+        when(agent.stream(any(Msg.class), anyString(), any(), anyBoolean(), eq(AnalysisMode.AUTO), any())).thenReturn(Flux.just(
                 new TextBlockDeltaEvent("r", "answer", "公开结论"), new AgentEndEvent("r")));
-        var events = new ChatController(agent, identities, new AgentEventMapper(new ObjectMapper()),
+        var events = new ChatController(agent, mock(dev.qiqi.dataagent.agent.CreativeFeature.class), identities, new AgentEventMapper(new ObjectMapper()),
                 new ChartProperties(false, java.net.URI.create("http://localhost:3033/mcp"), Duration.ofSeconds(30)),
                 new WebSearchProperties(false, "", Duration.ofSeconds(15)), failing, new RunCoordinator(), plans(), Duration.ofSeconds(5))
                 .stream("admin", new ChatRequest("test", "session", false))
@@ -84,7 +99,7 @@ class ChatProjectionTest {
     }
     @Test void totalDeadlineStopsAnOtherwiseContinuouslyStreamingRun() {
         var cancelled = new AtomicBoolean();
-        when(agent.stream(anyString(), anyString(), any(), anyBoolean(), any())).thenReturn(
+        when(agent.stream(any(Msg.class), anyString(), any(), anyBoolean(), eq(AnalysisMode.AUTO), any())).thenReturn(
                 Flux.interval(Duration.ofMillis(10)).map(tick -> (AgentEvent) new TextBlockDeltaEvent("r", "b", "progress"))
                         .doOnCancel(() -> cancelled.set(true)));
         var events = controller(Duration.ofMillis(150)).stream("admin", new ChatRequest("long", "deadline", false))
@@ -95,6 +110,15 @@ class ChatProjectionTest {
         assertThat(end.status()).isEqualTo("FAILED");
         assertThat(store.execution(end.runId(), 1).status()).isEqualTo("FAILED");
     }
+    @Test void selectedModeIsPassedToTheAgentForThisTurn() {
+        when(agent.stream(any(Msg.class), eq("mode-session"), any(), anyBoolean(), eq(AnalysisMode.REVIEW), any()))
+                .thenReturn(Flux.just(new TextBlockDeltaEvent("r", "answer", "已完成"), new AgentEndEvent("r")));
+        var events = controller(Duration.ofSeconds(5)).stream("admin",
+                new ChatRequest("只查订单数", "mode-session", false, null, AnalysisMode.REVIEW))
+                .map(sse -> sse.data()).collectList().block(Duration.ofSeconds(10));
+        assertThat(events).extracting(StreamEvent::type).contains("RUN_END");
+        verify(agent).stream(any(Msg.class), eq("mode-session"), any(), eq(false), eq(AnalysisMode.REVIEW), any());
+    }
     @Test void planPauseIsAwaitingConfirmationAndPlainTextIsARevision() {
         var confirm = new RequireUserConfirmEvent("reply", List.of(io.agentscope.core.message.ToolUseBlock.builder()
                 .id("call-1").name("submit_analysis_plan")
@@ -102,7 +126,7 @@ class ChatProjectionTest {
                         "sections", List.of(Map.of("title", "规模", "items", List.of("订单数"))),
                         "deliverables", List.of(Map.of("title", "报告", "detail", "关键数字"))))
                 .build()));
-        when(agent.stream(anyString(), eq("plan-session"), any(), anyBoolean(), any())).thenReturn(Flux.just(confirm));
+        when(agent.stream(any(Msg.class), eq("plan-session"), any(), anyBoolean(), eq(AnalysisMode.AUTO), any())).thenReturn(Flux.just(confirm));
         var first = controller(Duration.ofSeconds(5)).stream("admin", new ChatRequest("分析租赁", "plan-session", false))
                 .map(sse -> sse.data()).collectList().block(Duration.ofSeconds(10));
         assertThat(first).extracting(StreamEvent::type).contains("PLAN_CARD", "RUN_END");
@@ -115,7 +139,7 @@ class ChatProjectionTest {
                         "sections", List.of(Map.of("title", "规模", "items", List.of("订单数"))),
                         "deliverables", List.of(Map.of("title", "报告", "detail", "只保留订单数"))))
                 .build()));
-        when(agent.stream(any(io.agentscope.core.message.Msg.class), eq("plan-session"), any(), anyBoolean(), any()))
+        when(agent.stream(any(Msg.class), eq("plan-session"), any(), anyBoolean(), eq(AnalysisMode.AUTO), any()))
                 .thenReturn(Flux.just(rewritten));
         var second = controller(Duration.ofSeconds(5)).stream("admin", new ChatRequest("只要订单数", "plan-session", false))
                 .map(sse -> sse.data()).collectList().block(Duration.ofSeconds(10));
@@ -123,8 +147,8 @@ class ChatProjectionTest {
         assertThat(second.stream().filter(event -> event.type().equals("PLAN_CARD")).findFirst().orElseThrow().data())
                 .containsEntry("toolCallId", "call-2").containsEntry("title", "只要订单数");
         var sent = org.mockito.ArgumentCaptor.forClass(io.agentscope.core.message.Msg.class);
-        verify(agent).stream(sent.capture(), eq("plan-session"), any(), anyBoolean(), any());
-        var results = (List<?>) sent.getValue().getMetadata().get(io.agentscope.core.message.Msg.METADATA_CONFIRM_RESULTS);
+        verify(agent, times(2)).stream(sent.capture(), eq("plan-session"), any(), anyBoolean(), eq(AnalysisMode.AUTO), any());
+        var results = (List<?>) sent.getAllValues().getLast().getMetadata().get(Msg.METADATA_CONFIRM_RESULTS);
         var decision = (ConfirmResult) results.getFirst();
         assertThat(decision.isConfirmed()).isTrue();
         assertThat(decision.getToolCall().getInput()).containsEntry("userFeedback", "只要订单数");

@@ -22,6 +22,163 @@ const messages = $("#messages");
 const input = $("#query");
 const user = $("#user");
 const scrollArea = $("#scroll-area");
+const modeNames = { AUTO: "自动", FAST: "快速执行", REVIEW: "先确认方案" };
+function syncModePicker() {
+  const value = $("#analysis-mode").value;
+  $("#analysis-mode-label").textContent = modeNames[value] || modeNames.AUTO;
+  $("#analysis-mode-trigger").setAttribute("aria-label", `执行方式：${modeNames[value] || modeNames.AUTO}`);
+  document.querySelectorAll("#analysis-mode-menu [data-mode]").forEach(button =>
+    button.setAttribute("aria-checked", String(button.dataset.mode === value)));
+}
+function closeComposerMenus() {
+  $("#composer-options-menu").hidden = true;
+  $("#analysis-mode-menu").hidden = true;
+  $("#more-input-options").setAttribute("aria-expanded", "false");
+  $("#analysis-mode-trigger").setAttribute("aria-expanded", "false");
+}
+function toggleComposerMenu(menuId, triggerId) {
+  const wasOpen = !$(menuId).hidden;
+  closeComposerMenus();
+  if (!wasOpen) {
+    $(menuId).hidden = false;
+    $(triggerId).setAttribute("aria-expanded", "true");
+  }
+}
+$("#more-input-options").addEventListener("click", () => toggleComposerMenu("#composer-options-menu", "#more-input-options"));
+$("#analysis-mode-trigger").addEventListener("click", () => toggleComposerMenu("#analysis-mode-menu", "#analysis-mode-trigger"));
+document.querySelectorAll("#analysis-mode-menu [data-mode]").forEach(button => button.addEventListener("click", () => {
+  $("#analysis-mode").value = button.dataset.mode;
+  $("#analysis-mode").dispatchEvent(new Event("change"));
+  closeComposerMenus();
+  $("#analysis-mode-trigger").focus();
+}));
+$("#analysis-mode").addEventListener("change", syncModePicker);
+$("#online-search").addEventListener("change", closeComposerMenus);
+document.addEventListener("click", event => {
+  if (!event.target.closest(".composer-options, .analysis-mode-picker")) closeComposerMenus();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && (!$("#composer-options-menu").hidden || !$("#analysis-mode-menu").hidden)) {
+    const trigger = $("#analysis-mode-menu").hidden ? $("#more-input-options") : $("#analysis-mode-trigger");
+    closeComposerMenus(); trigger.focus(); event.preventDefault();
+  }
+});
+syncModePicker();
+function showWorkspacePage(page) {
+  const panel = page === "data" ? $("#data-center-page") : null;
+  $("#data-center-page").hidden = panel !== $("#data-center-page");
+  $("#welcome").hidden = !!panel || !!activeChat();
+  messages.hidden = !!panel;
+  const dock = $(".composer-dock");
+  dock.hidden = !!panel;
+  if (!panel && !activeChat()) $("#welcome").insertBefore(dock, $(".suggestion-heading"));
+  else $(".workspace").append(dock);
+  $("#open-data-center").classList.toggle("active", page === "data");
+  $("#conversation-title").textContent = page === "data" ? "数据中心" : activeChat()?.title || "新建分析";
+  scrollArea.scrollTop = 0;
+}
+const catalog = { tab: "tables", tables: [], files: [], selected: null, loaded: false };
+function catalogItems() { return catalog.tab === "tables" ? catalog.tables : catalog.files; }
+function catalogEmpty() {
+  const detail = $("#data-center-detail");
+  detail.replaceChildren();
+  const empty = element("div", "catalog-empty");
+  empty.append(element("div", "catalog-empty-icon", catalog.tab === "files" ? "▤" : "▦"),
+    element("h2", "", catalog.tab === "files" ? "当前会话还没有文件" : "选择一个数据表"),
+    element("p", "", catalog.tab === "files" ? "上传 CSV、XLSX 或 XLS 文件，即可在当前会话中分析。" : "从左侧查看已授权的数据表及字段。"));
+  if (catalog.tab === "files") {
+    const add = element("button", "catalog-primary", "添加数据");
+    add.type = "button"; add.addEventListener("click", () => $("#data-center-upload").click()); empty.append(add);
+  }
+  detail.append(empty);
+}
+function catalogDetail() {
+  const item = catalogItems().find(entry => (entry.fileId || entry.name) === catalog.selected);
+  if (!item) { catalogEmpty(); return; }
+  const detail = $("#data-center-detail");
+  detail.replaceChildren();
+  const heading = element("div", "catalog-detail-heading");
+  const title = element("div", "");
+  title.append(element("span", "source-kind", catalog.tab === "files" ? "当前会话文件" : "已授权数据表"), element("h2", "", item.name));
+  const analyze = element("button", "catalog-primary", "＋ 去分析"); analyze.type = "button";
+  analyze.addEventListener("click", () => {
+    showWorkspacePage(null);
+    if (catalog.tab === "files") {
+      state.attachment = { ...item, conversationId: state.conversationId };
+      $("#file-status").textContent = `${item.name} · ${item.totalRows} 行`;
+      input.value ||= "请分析这个文件，先介绍数据，再按合适的维度汇总。";
+    } else {
+      state.attachment = null; $("#file-status").textContent = "";
+      input.value ||= `请介绍 ${item.name} 数据表，并根据表结构给出可分析的方向。`;
+    }
+    resizeInput(); refreshControls(); input.focus();
+  });
+  heading.append(title, analyze); detail.append(heading);
+  detail.append(element("p", "catalog-description", catalog.tab === "files"
+    ? `该文件有 ${item.totalRows} 行、${item.columns.length} 列，仅能在当前会话中分析。`
+    : item.description || "当前账号可查询此表。"));
+  const meta = element("div", "catalog-meta");
+  meta.append(element("span", "", catalog.tab === "files" ? "文件格式" : "数据库"), element("strong", "", catalog.tab === "files" ? item.name.split(".").pop().toUpperCase() : item.databaseProduct || "当前数据库"),
+    element("span", "", catalog.tab === "files" ? "数据行数" : "字段数"), element("strong", "", String(catalog.tab === "files" ? item.totalRows : (item.columns || []).length)));
+  detail.append(meta, element("h3", "catalog-section-title", catalog.tab === "files" ? "文件字段" : "表字段"));
+  const fields = element("div", "catalog-fields");
+  for (const column of item.columns || []) {
+    const row = element("div", "catalog-field");
+    row.append(element("strong", "", typeof column === "string" ? column : column.name),
+      element("span", "", typeof column === "string" ? "文件列" : `${column.type || ""}${column.nullable === false ? " · 必填" : ""}`)); fields.append(row);
+  }
+  detail.append(fields);
+  if (catalog.tab === "tables" && item.foreignKeys?.length) {
+    detail.append(element("h3", "catalog-section-title", "关联关系"));
+    for (const key of item.foreignKeys) detail.append(element("p", "catalog-relation", `${key.column} → ${key.references}`));
+  }
+}
+function renderCatalog() {
+  $("#data-tab-tables").classList.toggle("active", catalog.tab === "tables");
+  $("#data-tab-files").classList.toggle("active", catalog.tab === "files");
+  $("#data-tab-tables").setAttribute("aria-selected", String(catalog.tab === "tables"));
+  $("#data-tab-files").setAttribute("aria-selected", String(catalog.tab === "files"));
+  $("#data-center-scope").textContent = catalog.tab === "files" ? "仅显示当前会话上传的文件" : "当前账号可查询的数据表";
+  const list = $("#data-center-content"); list.replaceChildren();
+  const query = $("#data-center-search").value.trim().toLocaleLowerCase();
+  const items = catalogItems().filter(item => `${item.name} ${item.description || ""}`.toLocaleLowerCase().includes(query));
+  for (const item of items) {
+    const button = element("button", "catalog-item"); button.type = "button";
+    button.classList.toggle("active", catalog.selected === (item.fileId || item.name));
+    button.append(element("span", "catalog-item-icon", catalog.tab === "files" ? "▤" : "▦"), element("span", "catalog-item-text", item.name));
+    button.addEventListener("click", () => { catalog.selected = item.fileId || item.name; renderCatalog(); });
+    list.append(button);
+  }
+  if (!items.length) list.append(element("p", "catalog-list-empty", query ? "没有匹配结果" : catalog.tab === "files" ? "当前会话暂无文件" : "当前账号暂无数据表"));
+  catalogDetail();
+}
+async function loadCatalog() {
+  const list = $("#data-center-content"); list.textContent = "正在读取数据目录…";
+  const tab = catalog.tab, conversationId = state.conversationId, username = user.value;
+  try {
+    const response = await request(tab === "tables" ? "/api/data-center" : `/api/files?conversationId=${encodeURIComponent(conversationId)}`,
+      { headers: { "X-Qiqi-User": username } });
+    if (!response.ok) throw new Error("数据目录暂不可用");
+    const data = await response.json();
+    if (catalog.tab !== tab || state.conversationId !== conversationId || user.value !== username) return;
+    if (tab === "tables") catalog.tables = data.tables || [];
+    else catalog.files = Array.isArray(data) ? data : [];
+    catalog.loaded = true;
+    if (!catalogItems().some(item => (item.fileId || item.name) === catalog.selected)) catalog.selected = catalogItems()[0]?.fileId || catalogItems()[0]?.name || null;
+    renderCatalog();
+  } catch (error) {
+    if (catalog.tab !== tab || state.conversationId !== conversationId || user.value !== username) return;
+    list.textContent = error.message || "数据目录暂不可用"; catalogEmpty();
+  }
+}
+$("#open-data-center").addEventListener("click", () => { showWorkspacePage("data"); loadCatalog(); });
+$("#data-center-refresh").addEventListener("click", loadCatalog);
+$("#data-center-search").addEventListener("input", renderCatalog);
+for (const [id, tab] of [["#data-tab-tables", "tables"], ["#data-tab-files", "files"]])
+  $(id).addEventListener("click", () => { catalog.tab = tab; catalog.selected = null; loadCatalog(); });
+$("#data-center-add").addEventListener("click", () => {
+  catalog.tab = "files"; catalog.selected = null; renderCatalog(); $("#data-center-upload").click();
+});
 const toolNames = {
   todoWrite: "更新分析计划",
   load_skill_through_path: "加载分析规范",
@@ -110,10 +267,13 @@ const settingsLabels = {
   appearance: ["外观", "让工作台更合你的习惯。"],
   model: ["AI 模型与 Key", "管理模型服务与连接凭据。"],
   database: ["数据库", "了解数据来源，设置查询边界。"],
+  creative: ["创意功能", "管理需明确调用的创意 skill。"],
+  memory: ["记忆管理", "查看长期记忆功能的接入计划。"],
 };
 function settingsMessage(text) {
   $("#model-load-status").textContent = text;
   $("#database-load-status").textContent = text;
+  $("#creative-load-status").textContent = text;
 }
 function fillServerSettings(data) {
   $("#model-provider").value = data.model.provider;
@@ -126,6 +286,8 @@ function fillServerSettings(data) {
   $("#database-location").textContent = data.database.location;
   $("#database-max-rows").value = data.database.maxRows;
   $("#database-timeout").value = data.database.timeoutSeconds;
+  $("#hyperframes-enabled").checked = !!data.creative?.hyperframesEnabled;
+  $("#hyperframes-enabled").disabled = false;
   $("#model-fields").disabled = false;
   $("#database-fields").disabled = false;
   settingsMessage(
@@ -185,7 +347,7 @@ document.querySelectorAll("[data-settings-tab]").forEach((button) =>
     $("#settings-heading").textContent = settingsLabels[page][0];
     $("#settings-subtitle").textContent = settingsLabels[page][1];
     $(".settings-main").scrollTop = 0;
-    if (page !== "appearance") loadServerSettings();
+    if (page === "model" || page === "database" || page === "creative") loadServerSettings();
   }),
 );
 async function saveServerSettings(kind, payload) {
@@ -212,12 +374,13 @@ async function saveServerSettings(kind, payload) {
       );
     }
     const data = await result.json();
-    $("#model-key").value = "";
-    if (kind === "model")
+    if (kind === "model") {
+      $("#model-key").value = "";
       $("#model-key-state").textContent = data.model.keyConfigured
         ? "已配置 · 不回显"
         : "未配置";
-    settingsMessage("已保存。重启本地服务后生效，当前运行中的分析不受影响。");
+    }
+    settingsMessage(kind === "creative" ? "已保存，下一轮消息立即生效。" : "已保存。重启本地服务后生效，当前运行中的分析不受影响。");
   } catch (error) {
     settingsMessage(error.message);
   } finally {
@@ -239,6 +402,10 @@ $("#database-settings-form").addEventListener("submit", (event) => {
     maxRows: Number($("#database-max-rows").value),
     timeoutSeconds: Number($("#database-timeout").value),
   });
+});
+$("#creative-settings-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveServerSettings("creative", { hyperframesEnabled: $("#hyperframes-enabled").checked });
 });
 
 function element(tag, className, text) {
@@ -266,12 +433,30 @@ async function copy(text) {
 function follow() {
   if (state.pinned) scrollArea.scrollTop = scrollArea.scrollHeight;
 }
+let lastScrollTop = scrollArea.scrollTop;
+let lastTouchY = null;
+function detachFromLatest() {
+  state.pinned = false;
+  $("#jump-latest").hidden = !messages.childElementCount;
+}
+scrollArea.addEventListener("wheel", event => {
+  if (event.deltaY < 0) detachFromLatest();
+}, { passive: true });
+scrollArea.addEventListener("touchstart", event => {
+  lastTouchY = event.touches[0]?.clientY ?? null;
+}, { passive: true });
+scrollArea.addEventListener("touchmove", event => {
+  const y = event.touches[0]?.clientY;
+  if (y != null && lastTouchY != null && y > lastTouchY + 2) detachFromLatest();
+  if (y != null) lastTouchY = y;
+}, { passive: true });
 scrollArea.addEventListener(
   "scroll",
   () => {
-    state.pinned =
-      scrollArea.scrollHeight - scrollArea.scrollTop - scrollArea.clientHeight <
-      90;
+    const distance = scrollArea.scrollHeight - scrollArea.scrollTop - scrollArea.clientHeight;
+    if (distance > 8) state.pinned = false;
+    else if (scrollArea.scrollTop > lastScrollTop + 1) state.pinned = true;
+    lastScrollTop = scrollArea.scrollTop;
     $("#jump-latest").hidden = state.pinned || !messages.childElementCount;
   },
   { passive: true },
@@ -433,9 +618,13 @@ function renderHistory() {
   $("#conversation-title").textContent = activeChat()?.title || "新建分析";
   if (!state.chats.length)
     history.append(element("p", "history-empty", "还没有对话，开始一次分析吧"));
+  let lastGroup = "";
   for (const chat of [...state.chats].sort(
     (a, b) => b.updatedAt - a.updatedAt,
   )) {
+    const age = Date.now() - Number(chat.updatedAt);
+    const group = age < 86400000 ? "今天" : age < 7 * 86400000 ? "近 7 天" : "更早";
+    if (group !== lastGroup) { history.append(element("div", "history-group", group)); lastGroup = group; }
     const row = element("div", "history-row");
     row.classList.toggle("selected", chat.id === state.activeId);
     const button = element("button", "history-open");
@@ -456,7 +645,10 @@ function renderHistory() {
         }) + ` · ${chat.turns.length} 轮对话`,
       ),
     );
-    button.addEventListener("click", () => openConversation(chat.id));
+    button.addEventListener("click", () => {
+      openConversation(chat.id);
+      setHistoryExpanded(false);
+    });
     if (state.runs.has(chat.id)) {
       row.classList.add("running");
       button.querySelector(".history-date").textContent = "正在分析…";
@@ -545,6 +737,7 @@ function openConversation(id) {
   if (activeChat()) activeChat().draft = input.value;
   chat.unread = false;
   state.activeId = chat.id;
+  showWorkspacePage(null);
   state.conversationId = chat.runtimeId;
   messages.replaceChildren();
   input.value = chat.draft || "";
@@ -558,6 +751,7 @@ function openConversation(id) {
       continue;
     }
     const response = createResponse(turn.query, turn.time, chat.runtimeId);
+    response.analysisMode = turn.analysisMode || "AUTO";
     response.text = turn.text || "";
     response.restoredComplete = Boolean(response.text) && !turn.pending && Boolean(
       turn.finalReady ||
@@ -601,6 +795,7 @@ function openConversation(id) {
 function resetConversation() {
   if (activeChat()) activeChat().draft = input.value;
   state.activeId = null;
+  showWorkspacePage(null);
   state.conversationId = crypto.randomUUID();
   messages.replaceChildren();
   input.value = "";
@@ -684,7 +879,7 @@ async function loadMeta() {
   $("#online-search").disabled = !state.webSearchEnabled;
   $("#online-hint").textContent = state.webSearchEnabled
     ? "仅本次提问 · 搜索关键词将发送给 Tavily"
-    : "联网搜索暂未启用，需配置搜索服务。数据库查询和 CSV 分析不受影响。";
+    : "联网搜索暂未启用，需配置搜索服务。数据库和文件分析不受影响。";
   updateScope();
   state.workspaceEnabled = Boolean(meta.workspaceEnabled);
   state.executionEnabled = Boolean(meta.executionEnabled);
@@ -718,7 +913,7 @@ function syncPresentation(response) {
   const showFinal = finalReplyReady && Boolean(response.text);
   response.finalReady = showFinal;
   response.finalResult.hidden = !showFinal;
-  response.analysisNarrative.hidden = showFinal;
+  response.analysisNarrative.hidden = showFinal || Boolean(execution);
   response.card.classList.toggle("is-complete", showFinal);
   if (showFinal) response.actions.hidden = false;
   else if (!response.failed) response.actions.hidden = true;
@@ -726,26 +921,95 @@ function syncPresentation(response) {
     !response.executionList.childNodes.length &&
     !response.executionWarnings.childNodes.length;
   if (showFinal) revealCharts(response);
+  if (showFinal) void checkVideoOffer(response);
+}
+async function checkVideoOffer(response) {
+  const runId = response.diagnostics?.runId;
+  if (demoMode || !runId || response.videoOfferChecked ||
+      !["SUCCEEDED", "PARTIAL"].includes(response.diagnostics.status)) return;
+  response.videoOfferChecked = true;
+  try {
+    const result = await request(`/api/runs/${encodeURIComponent(runId)}/video-offer`,
+      { headers: { "X-Qiqi-User": response.username } });
+    if (!result.ok) return;
+    const offer = await result.json();
+    if (!offer.available || !response.card.isConnected) return;
+    showVideoOffer(response, offer);
+  } catch { /* Video suggestions never interrupt the report. */ }
+}
+function showVideoOffer(response, offer) {
+  const host = response.videoHost;
+  host.hidden = false;
+  host.replaceChildren();
+  const title = element("strong", "", "把这份分析做成短视频？");
+  const note = element("span", "", "使用已核实的查询结果，生成 15 秒无配音数据视频。");
+  const accept = element("button", "", offer.videoId ? "查看短视频" : "用 HyperFrames 生成");
+  const dismiss = element("button", "", "暂不");
+  accept.type = dismiss.type = "button";
+  dismiss.addEventListener("click", () => { host.hidden = true; });
+  accept.addEventListener("click", async () => {
+    accept.disabled = true;
+    accept.textContent = offer.videoId ? "正在打开…" : "正在生成，约需几十秒…";
+    try {
+      let videoId = offer.videoId;
+      if (!videoId) {
+        const result = await request(`/api/runs/${encodeURIComponent(response.diagnostics.runId)}/video`, {
+          method: "POST", headers: { "X-Qiqi-User": response.username },
+        });
+        if (!result.ok) {
+          let detail = "视频生成失败，请检查本地 HyperFrames 和 FFmpeg。";
+          try { detail = (await result.json()).error || detail; } catch { /* Keep fallback. */ }
+          throw new Error(detail);
+        }
+        videoId = (await result.json()).id;
+      }
+      const url = `/api/runs/${encodeURIComponent(response.diagnostics.runId)}/video/${encodeURIComponent(videoId)}`;
+      const result = await request(url, { headers: { "X-Qiqi-User": response.username } });
+      if (!result.ok) throw new Error("视频文件不可用，请稍后重试。");
+      if (response.videoObjectUrl) URL.revokeObjectURL(response.videoObjectUrl);
+      response.videoObjectUrl = URL.createObjectURL(await result.blob());
+      host.replaceChildren(element("strong", "", "分析短视频已生成"));
+      const player = element("video", "report-video-player");
+      player.controls = true; player.preload = "metadata"; player.src = response.videoObjectUrl;
+      const download = element("a", "report-video-download", "下载 MP4");
+      download.href = response.videoObjectUrl; download.download = "Qiqi-分析短视频.mp4";
+      host.append(player, download, element("small", "", `查询证据：${offer.queryId}`));
+    } catch (error) {
+      accept.disabled = false;
+      accept.textContent = "重试生成短视频";
+      note.textContent = error.message || "视频生成失败";
+    }
+  });
+  host.append(title, note, accept, dismiss);
+}
+function reconcileChildren(target, next) {
+  const current = [...target.childNodes];
+  for (let index = 0; index < next.length; index++) {
+    if (!current[index]) target.append(next[index]);
+    else if (!current[index].isEqualNode(next[index])) current[index].replaceWith(next[index]);
+  }
+  for (let index = next.length; index < current.length; index++) current[index].remove();
+}
+function paintMarkdown(target, markdown) {
+  const staging = element("div");
+  renderMarkdown(staging, markdown);
+  reconcileChildren(target, [...staging.childNodes]);
 }
 function renderFinalReport(response, text) {
   const staging = element("div");
   renderMarkdown(staging, text);
   const children = [...staging.childNodes];
   if (!children.length) {
-    response.resultConclusionBody.replaceChildren();
-    response.reportBody.replaceChildren();
+    reconcileChildren(response.resultConclusionBody, []);
+    reconcileChildren(response.reportBody, []);
     return;
   }
   let split = 1;
   if (/^H[12]$/.test(children[0].nodeName)) {
     while (split < children.length && !/^H[12]$/.test(children[split].nodeName)) split++;
   }
-  response.resultConclusionBody.replaceChildren(
-    ...children.slice(0, split).map((node) => node.cloneNode(true)),
-  );
-  response.reportBody.replaceChildren(
-    ...children.slice(split).map((node) => node.cloneNode(true)),
-  );
+  reconcileChildren(response.resultConclusionBody, children.slice(0, split));
+  reconcileChildren(response.reportBody, children.slice(split));
   response.reportBody.hidden = split >= children.length;
 }
 function createResponse(query, timestamp = new Date().toISOString(), conversationId = state.conversationId) {
@@ -771,7 +1035,7 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
   const progress = element("div", "response-status busy", "正在理解你的问题…");
   const progressCount = element("span", "analysis-count", "准备中");
   progressHeader.append(progress, progressCount);
-  const todoArea = element("section", "todo-panel");
+  const todoArea = element("details", "todo-panel");
   todoArea.setAttribute("aria-label", "分析计划");
   todoArea.hidden = true;
   analysisProgress.append(progressHeader, todoArea);
@@ -788,17 +1052,20 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
   const resultConclusionBody = element("div", "result-conclusion-body markdown-body");
   resultConclusion.append(resultConclusionBody);
   const chartArea = element("div", "chart-results");
+  const dataViews = element("section", "data-views");
+  dataViews.hidden = true;
   const reportBody = element("section", "report-body markdown-body");
   const sourceArea = element("section", "web-sources");
   sourceArea.append(element("strong", "", "网络来源"));
   sourceArea.hidden = true;
   const evidence = element("div", "query-evidence");
-  finalResult.append(resultConclusion, chartArea, reportBody, sourceArea, evidence);
+  finalResult.append(resultConclusion, chartArea, dataViews, reportBody, sourceArea, evidence);
   const executionDetails = element("details", "execution-details");
-  const executionSummary = element("summary", "execution-summary", "技术执行记录 · 准备中");
+  const executionSummary = element("summary", "execution-summary", "分析过程 · 准备中");
   const executionWarnings = element("div", "execution-warnings");
   const executionList = element("div", "execution-list");
   executionDetails.append(executionSummary, executionWarnings, executionList);
+  executionSummary.addEventListener("click", () => { response.processTouched = true; });
   const error = element("div", "response-error");
   error.hidden = true;
   error.setAttribute("role", "alert");
@@ -809,6 +1076,8 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
   diagnosticsArea.append(diagnosticsSummary, diagnosticsBody);
   const actions = element("div", "report-actions");
   actions.hidden = true;
+  const videoHost = element("section", "report-video-offer");
+  videoHost.hidden = true;
   const summary = element("span");
   const steps = { children: [] };
   const planHost = element("section", "plan-card-host");
@@ -835,11 +1104,17 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     executionSummary,
     executionWarnings,
     executionList,
+    narrationDetails: new Map(),
+    processInitialized: false,
+    processTouched: false,
     execution: null,
     toolDetails: new Map(),
     actions,
+    videoHost,
+    videoOfferChecked: false,
     evidence,
     chartArea,
+    dataViews,
     sourceArea,
     diagnosticsArea,
     diagnosticsSummary,
@@ -866,6 +1141,9 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     runEnded: false,
     failed: false,
     queries: new Set(),
+    visualizedQueries: new Set(),
+    requestedEvidence: new Set(),
+    dataViewRenderers: new Map(),
   };
   const copyButton = element("button", "", "复制 Markdown");
   copyButton.addEventListener("click", async () => {
@@ -884,10 +1162,25 @@ function createResponse(query, timestamp = new Date().toISOString(), conversatio
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
-  actions.append(copyButton, exportButton);
-  finalResult.append(actions);
-  card.append(heading, planHost, analysisProgress, analysisNarrative, finalResult,
-    executionDetails, error, diagnosticsArea);
+  const htmlButton = element("button", "", "预览报告");
+  htmlButton.addEventListener("click", async () => {
+    htmlButton.disabled = true;
+    try {
+      const html = await portableHtmlReport(response);
+      const dialog = $("#report-preview-dialog");
+      const frame = $("#report-preview-frame");
+      frame.srcdoc = html;
+      $("#download-html-report").onclick = () => downloadHtmlReport(html);
+      $("#print-html-report").onclick = () => frame.contentWindow?.print();
+      $("#close-report-preview").onclick = () => dialog.close();
+      dialog.showModal();
+    } catch { toast("网页报告生成失败，请稍后重试"); }
+    finally { htmlButton.disabled = false; }
+  });
+  actions.append(copyButton, exportButton, htmlButton);
+  finalResult.append(videoHost, actions);
+  card.append(heading, planHost, analysisProgress, analysisNarrative, executionDetails,
+    diagnosticsArea, error, finalResult);
   messages.append(card);
   return response;
 }
@@ -895,7 +1188,7 @@ function paintResponse(response, text) {
   if (text) {
     if (response.agentEnded || response.restoredComplete || response.finalReady)
       renderFinalReport(response, text);
-    else renderMarkdown(response.narrativeBody, text);
+    else if (!response.execution) paintMarkdown(response.narrativeBody, text);
   }
   syncPresentation(response);
   captureResponse(response);
@@ -925,12 +1218,10 @@ function scheduleRender(response) {
       ? Math.max(base, Math.ceil(remaining.length / 65))
       : remaining.length;
     response.visibleLength += remaining.slice(0, count).join("").length;
-    const typingTarget = response.agentEnded || response.finalReady
-      ? response.report
-      : response.narrativeBody;
     response.report.classList.remove("typing");
     response.narrativeBody.classList.remove("typing");
-    typingTarget.classList.toggle("typing", animate);
+    if (!response.execution && !response.agentEnded && !response.finalReady)
+      response.narrativeBody.classList.toggle("typing", animate);
     paintResponse(response, response.text.slice(0, response.visibleLength));
     if (response.visibleLength < response.text.length) scheduleRender(response);
   }, 32);
@@ -955,6 +1246,173 @@ function finishTyping(response, signal) {
     check();
   });
 }
+function numericValue(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || !/^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim())) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+function compactNumber(value) {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+}
+function renderDataView(response, result) {
+  const columns = Array.isArray(result.columns) ? result.columns.filter(name => typeof name === "string").slice(0, 30) : [];
+  const rows = Array.isArray(result.rows) ? result.rows.filter(row => row && typeof row === "object" && !Array.isArray(row)).slice(0, 200) : [];
+  if (!columns.length || !rows.length) return false;
+  const numeric = columns.filter(column => rows.some(row => numericValue(row[column]) !== null));
+  const category = columns.find(column => !numeric.includes(column)) || columns[0];
+  const metric = numeric.find(column => column !== category);
+  const points = metric ? rows.slice(0, 12).map((row, index) => ({
+    label: String(row[category] ?? `第 ${index + 1} 行`).slice(0, 80), value: numericValue(row[metric]),
+  })).filter(point => point.value !== null) : [];
+  const modes = ["概览", "表格"];
+  if (points.length >= 2) modes.push("柱状图", "折线图");
+  if (points.length >= 2 && points.every(point => point.value >= 0) && points.some(point => point.value > 0)) modes.push("环形图");
+  const card = element("details", "data-view-card");
+  card.dataset.queryId = result.queryId;
+  card.open = !response.dataViews.children.length;
+  card.append(element("summary", "data-view-title", `数据视图 · ${result.source?.name || `查询结果 ${response.dataViews.children.length + 1}`}`));
+  const inner = element("div", "data-view-inner");
+  const intro = element("div", "data-view-intro");
+  intro.append(element("span", "", `${result.rowCount ?? rows.length} 行结果`),
+    element("span", "", `${columns.length} 个字段`),
+    element("span", "", `证据 ${result.queryId}`));
+  if (result.truncated) intro.append(element("span", "data-view-warning", `仅展示前 ${rows.length} 行，图表基于预览数据`));
+  const tabs = element("div", "data-view-tabs");
+  tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "数据展示形式");
+  const stage = element("div", "data-view-stage");
+  function paint(mode, output = stage) {
+    output.replaceChildren();
+    if (output === stage) [...tabs.children].forEach(button => {
+      button.classList.toggle("active", button.textContent === mode);
+      button.setAttribute("aria-pressed", String(button.textContent === mode));
+    });
+    if (mode === "概览") {
+      const grid = element("div", "data-kpis");
+      const cards = [["结果行数", compactNumber(result.rowCount ?? rows.length)], ["可见字段", String(columns.length)]];
+      if (rows.length === 1) for (const column of numeric.slice(0, 4))
+        cards.push([column, compactNumber(numericValue(rows[0][column]))]);
+      else if (points.length) {
+        cards.push([`${metric} · 预览最小值`, compactNumber(Math.min(...points.map(point => point.value)))],
+          [`${metric} · 预览最大值`, compactNumber(Math.max(...points.map(point => point.value)))]);
+      }
+      for (const [label, value] of cards) {
+        const item = element("div", "data-kpi");
+        item.append(element("span", "", label), element("strong", "", value)); grid.append(item);
+      }
+      output.append(grid);
+    } else if (mode === "表格") {
+      const wrap = element("div", "data-table-wrap");
+      wrap.tabIndex = 0; wrap.setAttribute("role", "region"); wrap.setAttribute("aria-label", "查询数据表格");
+      const table = element("table", "data-table");
+      const head = element("thead"); const headRow = element("tr");
+      columns.forEach(column => headRow.append(element("th", "", column))); head.append(headRow);
+      const body = element("tbody");
+      for (const row of rows) {
+        const tr = element("tr"); columns.forEach(column => tr.append(element("td", "", row[column] == null ? "—" : String(row[column])))); body.append(tr);
+      }
+      table.append(head, body); wrap.append(table); output.append(wrap);
+    } else if (mode === "柱状图") {
+      const bars = element("div", "data-bars");
+      const max = Math.max(...points.map(point => Math.abs(point.value)), 1);
+      const signed = points.some(point => point.value < 0);
+      for (const point of points) {
+        const row = element("div", "data-bar-row");
+        const track = element("div", "data-bar-track"); const fill = element("div", "data-bar-fill");
+        track.classList.toggle("signed", signed);
+        fill.style.width = `${Math.abs(point.value) / max * (signed ? 50 : 100)}%`;
+        fill.classList.toggle("negative", point.value < 0); track.append(fill);
+        row.append(element("span", "data-bar-label", point.label), track,
+          element("strong", "data-bar-value", compactNumber(point.value))); bars.append(row);
+      }
+      output.append(bars);
+    } else if (mode === "折线图") {
+      const values = points.map(point => point.value);
+      const min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 640 230"); svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", `${metric} 按当前结果顺序变化`);
+      const coordinates = points.map((point, index) => ({
+        x: 35 + index * 570 / (points.length - 1), y: 185 - (point.value - min) / spread * 145,
+      }));
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      line.setAttribute("points", coordinates.map(point => `${point.x},${point.y}`).join(" "));
+      line.setAttribute("fill", "none"); line.setAttribute("stroke", "#6578d7");
+      line.setAttribute("stroke-width", "4"); line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("stroke-linejoin", "round"); svg.append(line);
+      coordinates.forEach((point, index) => {
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", point.x); circle.setAttribute("cy", point.y);
+        circle.setAttribute("r", "6"); circle.setAttribute("fill", "#6578d7");
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = `${points[index].label}: ${compactNumber(points[index].value)}`;
+        circle.append(title); svg.append(circle);
+      });
+      output.append(svg);
+      const labels = element("div", "data-line-labels");
+      labels.append(element("span", "", points[0].label), element("span", "", points.at(-1).label)); output.append(labels);
+    } else if (mode === "环形图") {
+      const palette = ["#6578d7", "#89a0e8", "#a9b8f0", "#8dcac0", "#b7dcd2", "#d9dcf8"];
+      const featured = points.slice(0, 6), total = points.reduce((sum, point) => sum + point.value, 0);
+      let offset = 0;
+      const slices = featured.map((point, index) => {
+        const start = offset; offset += point.value / total * 100;
+        return `${palette[index]} ${start}% ${offset}%`;
+      });
+      if (offset < 100) slices.push(`#e7eaf5 ${offset}% 100%`);
+      const layout = element("div", "data-donut-layout");
+      const donut = element("div", "data-donut"); donut.style.background = `conic-gradient(${slices.join(",")})`;
+      donut.append(element("div", "data-donut-center", compactNumber(total)));
+      const legend = element("div", "data-donut-legend");
+      featured.forEach((point, index) => {
+        const item = element("div", ""); const swatch = element("i"); swatch.style.background = palette[index];
+        item.append(swatch, element("span", "", point.label), element("strong", "", compactNumber(point.value)));
+        legend.append(item);
+      });
+      if (points.length > featured.length) {
+        const other = element("div", ""); const swatch = element("i"); swatch.style.background = "#e7eaf5";
+        other.append(swatch, element("span", "", `其他 ${points.length - featured.length} 项`),
+          element("strong", "", compactNumber(points.slice(featured.length).reduce((sum, point) => sum + point.value, 0))));
+        legend.append(other);
+      }
+      layout.append(donut, legend); output.append(layout);
+    }
+    if (mode !== "表格" && mode !== "概览") output.append(element("p", "data-view-note", `${category} · ${metric} · 按查询返回顺序展示前 ${points.length} 项`));
+  }
+  for (const mode of modes) {
+    const button = element("button", "", mode); button.type = "button";
+    button.addEventListener("click", () => paint(mode)); tabs.append(button);
+  }
+  const actions = element("div", "data-view-actions");
+  if (state.workspaceEnabled && typeof result.queryId === "string") {
+    const download = element("button", "data-export-button", result.truncated ? "↓ 下载预览 CSV" : "↓ 下载 CSV");
+    download.type = "button";
+    download.title = result.truncated ? "只包含当前预览行，不是完整查询结果" : "下载当前查询结果";
+    download.addEventListener("click", () => downloadProtected(`/api/evidence/${encodeURIComponent(result.queryId)}/csv?conversationId=${encodeURIComponent(response.conversationId)}`, response.username, `Qiqi-查询结果-${response.dataViews.children.length + 1}.csv`));
+    actions.append(download);
+  }
+  inner.append(intro, tabs, stage, actions); card.append(inner); response.dataViews.hidden = false;
+  response.dataViewRenderers.set(result.queryId, { modes, paint });
+  response.dataViews.append(card); paint("概览");
+  return true;
+}
+function resolveDataView(response, result) {
+  const id = result.queryId;
+  if (response.visualizedQueries.has(id)) return;
+  if (renderDataView(response, result)) {
+    response.visualizedQueries.add(id);
+    return;
+  }
+  if (!state.workspaceEnabled || response.requestedEvidence.has(id)) return;
+  response.requestedEvidence.add(id);
+  request(`/api/evidence/${encodeURIComponent(id)}?conversationId=${encodeURIComponent(response.conversationId)}`,
+    { headers: { "X-Qiqi-User": response.username } }).then(async reply => {
+    if (!reply.ok) return;
+    const full = await reply.json();
+    if (full.queryId === id && !response.visualizedQueries.has(id) && renderDataView(response, full))
+      response.visualizedQueries.add(id);
+  }).catch(() => { /* Old evidence can expire; the report and SQL remain available. */ });
+}
 function addEvidence(response, raw) {
   try {
     let result = JSON.parse(raw);
@@ -962,9 +1420,11 @@ function addEvidence(response, raw) {
     if (
       !result.queryId ||
       (!result.executedSql && !Array.isArray(result.columns)) ||
-      response.queries.has(result.queryId)
+      typeof result.queryId !== "string"
     )
       return;
+    resolveDataView(response, result);
+    if (response.queries.has(result.queryId)) return;
     response.queries.add(result.queryId);
     const details = element("details", "evidence-item");
     details.append(
@@ -989,11 +1449,6 @@ function addEvidence(response, raw) {
     if (result.executedSql) details.append(id, sql);
     else details.append(id, element("p", "", result.source?.operation === "preview" ? "文件预览 · 仅展示前 20 行" : "文件分析结果 · 使用完整文件进行统计"));
     if (result.source?.type === "csv") details.append(element("p", "", `来源：${result.source.name} · ${result.source.totalRows} 行 · ${result.source.operation}${result.source.valueColumn ? `(${result.source.valueColumn})` : ""}${result.source.groupBy ? ` · 按 ${result.source.groupBy} 分组` : ""}`));
-    if (state.workspaceEnabled) {
-      const download = element("button", "", result.truncated ? "导出预览 CSV（非完整结果）" : "导出 CSV");
-      download.addEventListener("click", () => downloadProtected(`/api/evidence/${encodeURIComponent(result.queryId)}/csv?conversationId=${encodeURIComponent(response.conversationId)}`, response.username, "Qiqi-result.csv"));
-      details.append(download);
-    }
     response.evidence.append(details);
   } catch {
     /* Tool errors and partial JSON do not create evidence. */
@@ -1104,16 +1559,17 @@ function showDiagnostics(response, run) {
   if (!run || typeof run.runId !== "string" || !/^[a-f0-9-]{36}$/.test(run.runId)) return;
   response.diagnostics = run;
   response.diagnosticsArea.hidden = false;
-  const labels = { RUNNING: "进行中", SUCCEEDED: "完成", PARTIAL: "完成 · 含工具失败", FAILED: "失败", CANCELLED: "已取消", INCOMPLETE: "未完成" };
+  const labels = { RUNNING: "进行中", SUCCEEDED: "完成", PARTIAL: "已生成结果 · 有失败记录", FAILED: "失败", CANCELLED: "已取消", INCOMPLETE: "未完成" };
   const duration = Math.max(0, Number(run.durationMs) || 0);
   response.diagnosticsSummary.textContent = `运行详情 · ${labels[run.status] || "未知状态"} · ${(duration / 1000).toFixed(1)} 秒`;
   const id = element("p", "run-id", `运行编号：${run.runId}`);
   response.diagnosticsBody.replaceChildren(id);
   if (run.errorCode) response.diagnosticsBody.append(element("p", "", `故障代码：${run.errorCode}`));
   if (run.usage) response.diagnosticsBody.append(element("p", "", `Token：输入 ${run.usage.inputTokens} / 输出 ${run.usage.outputTokens} / 缓存 ${run.usage.cachedTokens}`));
-  else response.diagnosticsBody.append(element("p", "", "Token：模型未返回用量"));
+  else response.diagnosticsBody.append(element("p", "", "用量统计：模型网关未提供"));
   const operations = element("ul");
   for (const op of (run.operations || []).slice(0, 250)) {
+    if (op.name?.startsWith("__")) continue;
     const name = op.kind === "model" ? "模型调用" : toolNames[op.name] || op.name;
     const line = element("li", op.status === "FAILED" ? "failed" : "",
       `${name} · ${labels[op.status] || op.status} · ${(Math.max(0, Number(op.durationMs) || 0) / 1000).toFixed(2)} 秒${op.errorCode ? ` · ${op.errorCode}` : ""}`);
@@ -1134,6 +1590,7 @@ function showDiagnostics(response, run) {
     finally { refresh.disabled = false; }
   });
   response.diagnosticsBody.append(refresh);
+  if (response.finalReady) void checkVideoOffer(response);
 }
 async function portableReport(response) {
   let markdown = reportMarkdown(response);
@@ -1149,6 +1606,61 @@ async function portableReport(response) {
   }
   return markdown;
 }
+function htmlAttribute(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function downloadHtmlReport(html) {
+  const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+  const link = element("a");
+  link.href = url;
+  link.download = `Qiqi-分析报告-${new Date().toISOString().slice(0, 10)}.html`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function portableHtmlReport(response) {
+  const views = response.dataViews.cloneNode(true);
+  views.querySelectorAll(".data-view-card").forEach(card => {
+    const queryId = card.dataset.queryId;
+    const renderer = response.dataViewRenderers?.get(queryId);
+    if (!renderer) return;
+    card.open = true;
+    card.querySelector(".data-view-tabs")?.remove();
+    card.querySelector(".data-view-stage")?.remove();
+    card.querySelector(".data-view-actions")?.remove();
+    const modes = element("div", "export-view-modes");
+    for (const mode of renderer.modes) {
+      const section = element("details", "export-view-mode");
+      section.open = mode === "概览" || mode === "表格";
+      section.append(element("summary", "", mode));
+      const stage = element("div", "data-view-stage");
+      renderer.paint(mode, stage);
+      section.append(stage);
+      modes.append(section);
+    }
+    card.querySelector(".data-view-inner")?.append(modes);
+  });
+  const figures = [];
+  for (const chart of response.charts.values()) {
+    let source = chart.source;
+    if (source.startsWith("/api/charts/")) {
+      const result = await request(source, { headers: { "X-Qiqi-User": response.username } });
+      if (!result.ok) throw new Error("Chart unavailable");
+      const blob = await result.blob();
+      source = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result)); reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+    figures.push(`<figure><figcaption>${htmlAttribute(chart.title)}</figcaption><img src="${htmlAttribute(source)}" alt="${htmlAttribute(chart.title)}"><small>查询证据：${htmlAttribute(chart.queryId)}</small></figure>`);
+  }
+  const sources = [...response.webSources.values()].map(source =>
+    `<li><a href="${htmlAttribute(source.url)}" rel="noopener noreferrer">${htmlAttribute(source.title)}</a></li>`).join("");
+  const style = `*{box-sizing:border-box}body{margin:0;background:#f6f7fb;color:#26302e;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:42px auto;padding:36px 42px;background:white;border:1px solid #e4e7ef;border-radius:22px;box-shadow:0 18px 60px #2024470c}header{border-bottom:1px solid #e6e9ef;margin-bottom:28px;padding-bottom:20px}header h1{margin:0;font-size:27px}header p,small{color:#777f91}.report-content h1,.report-content h2,.report-content h3{line-height:1.35}.report-content table,.data-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e5e9ef;padding:9px 12px;text-align:left}.table-wrap,.data-table-wrap{overflow:auto}.report-content pre{overflow:auto;background:#f5f6fa;padding:16px;border-radius:10px}figure{margin:28px 0;padding:18px;border:1px solid #e5e8ef;border-radius:16px}figure img{display:block;max-width:100%;margin:14px auto}figure small{display:block}.data-view-card{border:1px solid #e6e9ef;border-radius:16px;margin:20px 0;padding:16px}.data-view-title{font-weight:650}.data-view-intro{display:flex;gap:16px;color:#777f91;font-size:13px}.data-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:18px 0}.data-kpi{background:#f6f7fd;border-radius:12px;padding:14px}.data-kpi span,.data-kpi strong{display:block}.data-kpi span{font-size:12px;color:#777f91}.data-kpi strong{font-size:23px}.data-bars{display:grid;gap:12px;margin:20px 0}.data-bar-row{display:grid;grid-template-columns:130px 1fr 90px;gap:12px;align-items:center}.data-bar-track{position:relative;background:#edf0f9;border-radius:20px;height:17px}.data-bar-track.signed:after{content:"";position:absolute;left:50%;top:-3px;height:23px;border-left:1px solid #8c93a5}.data-bar-fill{background:#6578d7;height:100%;border-radius:20px}.data-bar-track.signed .data-bar-fill{position:absolute;left:50%}.data-bar-track.signed .data-bar-fill.negative{left:auto;right:50%}.data-bar-fill.negative{background:#d99483}.data-view-stage svg{width:100%}.data-line-labels{display:flex;justify-content:space-between}.data-donut-layout{display:flex;align-items:center;gap:28px}.data-donut{width:220px;height:220px;border-radius:50%;display:grid;place-items:center;flex:none}.data-donut-center{width:130px;height:130px;border-radius:50%;background:white;display:grid;place-items:center;font-size:23px;font-weight:700}.data-donut-legend>div{display:flex;gap:10px;align-items:center}.data-donut-legend i{width:10px;height:10px;border-radius:50%}.data-donut-legend strong{margin-left:auto}.data-view-note,.data-view-warning{font-size:12px;color:#777f91}@media(max-width:600px){main{margin:0;padding:20px;border:0;border-radius:0}.data-bar-row{grid-template-columns:80px 1fr 60px}.data-donut-layout{flex-direction:column}}`;
+  const exportStyle = `.export-view-mode{border-top:1px solid #e9ebf1;padding:12px 0}.export-view-mode summary{cursor:pointer;color:#454f71;font-weight:600}.export-view-mode .data-view-stage{padding:8px 0 12px}.data-view-warning{color:#a06d30}@media print{body{background:white}main{margin:0;max-width:none;padding:0;border:0;box-shadow:none}.export-view-mode{break-inside:avoid}.export-view-mode:not([open]){display:none}}`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:"><title>Qiqi 数据分析报告</title><style>${style}${exportStyle}</style></head><body><main><header><h1>数据分析报告</h1><p>Qiqi · ${htmlAttribute(new Date().toLocaleDateString("zh-CN"))}</p></header><section class="report-content">${response.resultConclusionBody.innerHTML}${figures.join("")}${views.innerHTML}${response.reportBody.innerHTML}</section>${sources ? `<footer><h2>网络来源</h2><ul>${sources}</ul></footer>` : ""}</main></body></html>`;
+}
 function reportMarkdown(response) {
   return response.text + [...response.charts.values()].map(chart =>
     `\n\n![${chart.title.replace(/[\[\]\r\n]/g, " ")}](${chart.source.replace(/\(/g, "%28").replace(/\)/g, "%29")})\n\n查询证据：${chart.queryId}`,
@@ -1156,26 +1668,57 @@ function reportMarkdown(response) {
     `- [${source.title.replace(/[\[\]\r\n]/g, " ")}](${source.url.replace(/\(/g, "%28").replace(/\)/g, "%29")})`).join("\n") : "");
 }
 const executionLabels = { QUEUED: "准备参数", RUNNING: "执行中", SUCCEEDED: "完成", FAILED: "未成功", CANCELLED: "已停止", INCOMPLETE: "未完成" };
-function applyNarrations(response, execution) {
-  const items = (Array.isArray(execution.narrations) ? execution.narrations : [])
-    .filter((item) => item?.kind === "text" && typeof item.id === "string" &&
-      item.id !== execution.finalNarrationId && item.content)
-    .slice(-4);
-  const latest = items.at(-1);
-  if (latest) renderMarkdown(response.narrativeBody, latest.content);
-  else if (!response.text || response.finalReady)
-    response.narrativeBody.textContent = "正在结合计划核对数据与业务口径。";
-  response.stageFindings.replaceChildren();
-  if (items.length > 1) {
-    const label = element("div", "stage-findings-label", "阶段进展");
-    const list = element("ul");
-    for (const item of items.slice(0, -1)) {
-      const row = element("li");
-      renderMarkdown(row, item.content);
-      list.append(row);
+function executionProgress(execution) {
+  return execution.status === "PARTIAL" && execution.finalNarrationId
+    ? "结果已生成 · 可查看失败记录" : execution.progress;
+}
+function renderExecutionSequence(response, execution) {
+  const narrations = new Map((execution.narrations || [])
+    .filter(item => item?.kind === "text" && typeof item.id === "string")
+    .map(item => [item.id, item]));
+  const nodes = [];
+  const seen = new Set();
+  const appendStep = (kind, id) => {
+    if (typeof id !== "string" || seen.has(`${kind}:${id}`)) return;
+    seen.add(`${kind}:${id}`);
+    if (kind === "tool") {
+      const tool = response.toolDetails.get(id);
+      if (tool) nodes.push(tool.item);
+    } else if (kind === "text" && id !== execution.finalNarrationId) {
+      const narration = narrations.get(id);
+      if (!narration?.content) return;
+      let view = response.narrationDetails.get(id);
+      if (!view) {
+        const row = timelineRow("text", "narration-step");
+        const label = element("div", "narration-label", "阶段说明");
+        const body = element("div", "narration-content markdown-body");
+        row.body.append(label, body);
+        view = { item: row.item, label, body, content: null };
+        response.narrationDetails.set(id, view);
+      }
+      view.label.textContent = execution.status === "RUNNING" && execution.steps?.at(-1)?.id === id
+        ? "正在输出" : "阶段说明";
+      if (view.content !== narration.content) {
+        paintMarkdown(view.body, narration.content);
+        view.content = narration.content;
+      }
+      nodes.push(view.item);
     }
-    response.stageFindings.append(label, list);
+  };
+  for (const step of execution.steps || []) appendStep(step.kind, step.id);
+  if (!execution.steps?.length)
+    for (const narration of narrations.values()) appendStep("text", narration.id);
+  for (const tool of execution.tools || []) appendStep("tool", tool.id);
+  const previous = [...response.executionList.childNodes];
+  if (previous.length !== nodes.length || previous.some((node, index) => node !== nodes[index]))
+    response.executionList.replaceChildren(...nodes);
+  for (const [id] of response.narrationDetails)
+    if (!narrations.has(id) || id === execution.finalNarrationId) response.narrationDetails.delete(id);
+  if (!response.processInitialized && execution.status === "RUNNING" && nodes.length) {
+    response.executionDetails.open = true;
+    response.processInitialized = true;
   }
+  if (execution.status !== "RUNNING" && !response.processTouched) response.executionDetails.open = false;
 }
 function executionCounts(tools) {
   return tools.reduce((counts, tool) => {
@@ -1197,7 +1740,7 @@ function applyExecution(response, execution, restore = false) {
     view.item.remove(); response.toolDetails.delete(id); response.tools.delete(id);
   }
   for (const tool of execution.tools.slice(0, 128)) {
-    if (typeof tool.id !== "string" || tool.name === "todoWrite") continue;
+    if (typeof tool.id !== "string" || tool.name === "todoWrite" || tool.name?.startsWith("__")) continue;
     let view = response.toolDetails.get(tool.id);
     if (!view) {
       const row = timelineRow(["FAILED", "INCOMPLETE", "CANCELLED"].includes(tool.status) ? "failed" : tool.status === "RUNNING" ? "running" : "tool", "tool-step");
@@ -1210,7 +1753,7 @@ function applyExecution(response, execution, restore = false) {
       const outputLabel = element("div", "tool-payload-label", "返回结果 · 摘要");
       details.append(summary, inputLabel, input, outputLabel, output);
       row.body.append(title, details);
-      view = { item: row.item, dot: row.dot, title, input, output, details };
+      view = { item: row.item, dot: row.dot, title, input, inputLabel, output, details };
       response.toolDetails.set(tool.id, view);
       response.tools.set(tool.id, row.item);
     }
@@ -1220,37 +1763,31 @@ function applyExecution(response, execution, restore = false) {
     view.item.classList.toggle("failed", failed);
     view.dot.className = `execution-dot ${failed ? "failed" : tool.status === "RUNNING" || tool.status === "QUEUED" ? "running" : "tool"}`;
     view.item.dataset.status = tool.status;
-    view.input.textContent = tool.arguments || (["QUEUED", "RUNNING"].includes(tool.status) ? "正在接收参数…" : "无参数");
+    view.input.textContent = tool.arguments || (["QUEUED", "RUNNING"].includes(tool.status) ? "正在接收参数…" : "");
+    view.input.hidden = !view.input.textContent;
+    view.inputLabel.hidden = view.input.hidden;
     view.output.textContent = tool.result || (["QUEUED", "RUNNING"].includes(tool.status) ? "等待工具返回…" : "未返回文本");
-    if (view.details) view.details.open = failed && Boolean(tool.result);
   }
-  const orderedIds = [];
-  for (const step of execution.steps || [])
-    if (step.kind === "tool" && !orderedIds.includes(step.id)) orderedIds.push(step.id);
-  for (const tool of execution.tools)
-    if (!orderedIds.includes(tool.id)) orderedIds.push(tool.id);
-  response.executionList.replaceChildren(...orderedIds
-    .map((id) => response.toolDetails.get(id)?.item)
-    .filter(Boolean));
-  applyNarrations(response, execution);
-  const visibleTools = execution.tools.filter((tool) => tool.name !== "todoWrite");
+  renderExecutionSequence(response, execution);
+  const visibleTools = execution.tools.filter((tool) => tool.name !== "todoWrite" && !tool.name?.startsWith("__"));
   const counts = executionCounts(visibleTools);
-  response.executionSummary.textContent = `技术执行记录 · ${counts.total} 次执行` +
+  const narrationCount = response.executionList.querySelectorAll(".narration-step").length;
+  response.executionSummary.textContent = `分析过程 · ${narrationCount ? `${narrationCount} 段说明 · ` : ""}${counts.total} 次执行` +
     (counts.succeeded ? ` · ${counts.succeeded} 项完成` : "") +
     (counts.running ? ` · ${counts.running} 项进行中` : "") +
     (counts.failed ? ` · ${counts.failed} 项未成功` : "") +
     (execution.truncated ? " · 部分记录已省略" : "");
-  response.executionDetails.open = counts.failed > 0 || response.chartErrors.size > 0;
   response.todoArea.hidden = !execution.todos.length;
   const completed = execution.todos.filter(todo => todo.status === "completed").length;
-  const title = element("strong", "", `分析计划 · ${completed}/${execution.todos.length}`);
+  const inferred = execution.todos.some(todo => todo.completionSource === "final_report");
+  const title = element("summary", "", `分析计划 · ${completed}/${execution.todos.length}${inferred ? " · 已按报告收尾" : ""}`);
   response.progressCount.textContent = execution.todos.length
     ? `${completed}/${execution.todos.length} 已完成`
     : execution.status === "RUNNING" ? "分析中" : "已结束";
   const list = element("ol", "todo-list");
   for (const todo of execution.todos.slice(0, 20)) {
     const interrupted = todo.status === "in_progress" && execution.status !== "RUNNING";
-    const label = todo.status === "completed" ? "已完成" : interrupted ? "未完成" : todo.status === "in_progress" ? "进行中" : "待处理";
+    const label = todo.completionSource === "final_report" ? "报告收尾" : todo.status === "completed" ? "已完成" : interrupted ? "未完成" : todo.status === "in_progress" ? "进行中" : "待处理";
     const row = element("li", `todo-item ${interrupted ? "interrupted" : todo.status}`);
     row.append(element("span", "todo-state", label), element("span", "", todo.content));
     list.append(row);
@@ -1279,7 +1816,7 @@ function applyExecution(response, execution, restore = false) {
       render(response);
     }
     response.progress.textContent = execution.status === "AWAITING_CONFIRMATION"
-      ? "我将在你确认以后继续" : execution.progress;
+      ? "我将在你确认以后继续" : executionProgress(execution);
     response.actions.hidden = !response.restoredComplete;
     if (["FAILED"].includes(execution.status)) {
       setNotice(response, execution.errorCode === "MAX_ITERATIONS"
@@ -1507,6 +2044,7 @@ async function continuePlan(response, confirmed, feedback) {
         query: confirmed ? "开始任务" : feedback,
         conversationId: response.conversationId,
         online: false,
+        analysisMode: response.analysisMode || "AUTO",
         plan: { toolCallId: response.pendingPlan.toolCallId, confirmed, feedback },
       }),
       signal: controller.signal,
@@ -1533,8 +2071,9 @@ async function send(query) {
     return continuePlan(state.planResponse, false, query.trim());
   }
   if (currentRun() || !state.configured || state.historyLoading || !query.trim()) return;
+  const analysisMode = $("#analysis-mode").value;
   if (state.attachment?.conversationId === state.conversationId) {
-    query += `\n\n已上传 CSV：${state.attachment.name}；fileId=${state.attachment.fileId}。请先用 analyze_file 预览，统计使用完整文件。`;
+    query += `\n\n已上传数据文件：${state.attachment.name}；fileId=${state.attachment.fileId}。请先用 analyze_file 预览，统计使用完整文件。`;
     state.attachment = null;
     $("#file-status").textContent = "";
   }
@@ -1559,6 +2098,7 @@ async function send(query) {
     text: "",
     pending: true,
     status: "正在分析…",
+    analysisMode,
     steps: [],
     evidence: [],
   };
@@ -1569,12 +2109,16 @@ async function send(query) {
   $("#welcome").hidden = true;
   messages.append(element("article", "message user", query));
   const response = createResponse(query, turn.time, chat.runtimeId);
+  response.analysisMode = analysisMode;
   response.savedTurn = turn;
   state.runs.set(chat.id, { controller, response });
   chat.draft = "";
   renderHistory();
   refreshControls();
   input.value = "";
+  $("#analysis-mode").value = "AUTO";
+  syncModePicker();
+  closeComposerMenus();
   input.style.height = "";
   $("#status").textContent = "正在分析…";
   follow();
@@ -1588,7 +2132,7 @@ async function send(query) {
         "Content-Type": "application/json",
         "X-Qiqi-User": user.value,
       },
-      body: JSON.stringify({ query, conversationId: chat.runtimeId, online }),
+      body: JSON.stringify({ query, conversationId: chat.runtimeId, online, analysisMode }),
       signal: controller.signal,
     });
     if (!result.ok) {
@@ -1688,6 +2232,13 @@ $("#new-chat").addEventListener("click", () => {
   if (!$("#settings-page").hidden) closeSettings();
   resetConversation();
 });
+function setHistoryExpanded(expanded) {
+  $(".sidebar").classList.toggle("history-expanded", expanded);
+  $("#history-toggle").setAttribute("aria-expanded", String(expanded));
+}
+$("#history-toggle").addEventListener("click", () => {
+  setHistoryExpanded($("#history-toggle").getAttribute("aria-expanded") !== "true");
+});
 user.addEventListener("change", async () => {
   updateScope();
   if (state.workspaceEnabled) await loadRemoteHistory();
@@ -1702,26 +2253,50 @@ document.querySelectorAll(".suggestion").forEach((button) =>
     input.focus();
   }),
 );
-$("#file-upload").addEventListener("change", async event => {
+async function uploadSelectedFile(event, fromCatalog = false) {
   const file = event.target.files?.[0];
   event.target.value = "";
   if (!file) return;
-  if (!state.workspaceEnabled || !/\.csv$/i.test(file.name) || file.size > 2 * 1024 * 1024) {
-    toast("请上传不超过 2 MB 的 UTF-8 CSV 文件"); return;
+  if (!state.workspaceEnabled || !/\.(csv|xlsx|xls)$/i.test(file.name) || file.size > 2 * 1024 * 1024) {
+    toast("请上传不超过 2 MB 的 CSV、XLSX 或 XLS 文件"); return;
   }
   const conversationId = state.conversationId, username = user.value;
+  state.attachment = null;
   $("#file-status").textContent = "正在读取文件…";
   try {
+    const payload = { name: file.name, conversationId };
+    if (/\.csv$/i.test(file.name)) payload.content = await file.text();
+    else {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      payload.base64 = btoa(binary);
+    }
     const result = await request("/api/files", { method: "POST", headers: { "Content-Type": "application/json", "X-Qiqi-User": username },
-      body: JSON.stringify({ name: file.name, content: await file.text(), conversationId }) });
+      body: JSON.stringify(payload) });
     if (!result.ok) { const error = await result.json(); throw new Error(error.error || "文件上传失败"); }
     const data = await result.json();
     if (state.conversationId !== conversationId || user.value !== username) return;
     state.attachment = { ...data, conversationId };
     $("#file-status").textContent = `${data.name} · ${data.totalRows} 行 · ${data.columns.join("、")}`;
-    input.value ||= "请分析这个文件，先介绍数据，再按合适的维度汇总。";
-    resizeInput(); refreshControls();
-  } catch (error) { $("#file-status").textContent = error.message || "文件上传失败"; }
+    if (fromCatalog) {
+      catalog.tab = "files"; catalog.selected = data.fileId;
+      await loadCatalog(); toast("文件已上传，可以查看字段或去分析");
+    } else {
+      input.value ||= "请分析这个文件，先介绍数据，再按合适的维度汇总。";
+      resizeInput(); refreshControls();
+    }
+  } catch (error) {
+    $("#file-status").textContent = "";
+    toast(error.message || "文件上传失败");
+  }
+}
+$("#file-upload").addEventListener("change", event => uploadSelectedFile(event));
+$("#data-center-upload").addEventListener("change", event => uploadSelectedFile(event, true));
+$("#remove-file").addEventListener("click", () => {
+  state.attachment = null;
+  $("#file-status").textContent = "";
+  refreshControls();
 });
 loadMeta().catch(() => {
   $("#notice").textContent = "无法连接服务，请确认服务已启动后刷新页面。";

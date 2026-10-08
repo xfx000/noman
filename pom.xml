@@ -20,6 +20,7 @@
         <java.version>21</java.version>
         <agentscope.version>2.0.3</agentscope.version>
         <jsqlparser.version>5.1</jsqlparser.version>
+        <poi.version>5.5.1</poi.version>
     </properties>
 
     <dependencies>
@@ -54,6 +55,11 @@
             <groupId>com.github.jsqlparser</groupId>
             <artifactId>jsqlparser</artifactId>
             <version>${jsqlparser.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
         </dependency>
         <dependency>
             <groupId>com.h2database</groupId>

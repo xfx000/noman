@@ -18,6 +18,8 @@ import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * AgentScope 与 Qiqi 查询服务之间的适配器。
@@ -27,6 +29,8 @@ import java.util.Map;
  */
 @Component
 public class ExecuteSqlAgentTool implements AgentTool {
+    private static final Pattern MISSING_SQL_OBJECT = Pattern.compile(
+            "(?i)\\b(function|column|table)\\s+\\\"?([A-Za-z_][A-Za-z0-9_]*)\\\"?\\s+not found");
     // 只允许模型提交 SQL。用户和部门不能成为模型参数，防止模型伪造身份绕过权限。
     private static final Map<String, Object> PARAMETERS = Map.of(
             "type", "object",
@@ -50,7 +54,7 @@ public class ExecuteSqlAgentTool implements AgentTool {
 
     @Override public String getName() { return "execute_sql"; }
     @Override public String getDescription() {
-        return "Execute one validated read-only SQL query. User identity and data scope are supplied by the server, never by model arguments.";
+        return "Only after a plan has been recorded or confirmed: validate and execute one read-only SQL query server-side, applying data scope and audit. This includes DISTINCT status/value discovery queries. User identity is supplied by the server.";
     }
     @Override public Map<String, Object> getParameters() { return PARAMETERS; }
     @Override public boolean isReadOnly() { return true; }
@@ -90,6 +94,17 @@ public class ExecuteSqlAgentTool implements AgentTool {
     }
 
     private static String message(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.sql.SQLException sql) {
+                String state = sql.getSQLState();
+                String category = state != null && state.matches("[A-Za-z0-9]{5}")
+                        ? "SQLState " + state : "SQL syntax or execution error";
+                Matcher missing = MISSING_SQL_OBJECT.matcher(sql.getMessage() == null ? "" : sql.getMessage());
+                String detail = missing.find() ? missing.group(1).toLowerCase() + " " + missing.group(2) + " not found"
+                        : "check syntax and functions against the database product returned by inspect_schema";
+                return "Database rejected query (" + category + "): " + detail;
+            }
+        }
         String raw = error.getMessage();
         if (raw == null || raw.isBlank()) raw = error.getClass().getSimpleName();
         return raw.length() <= 500 ? raw : raw.substring(0, 500);

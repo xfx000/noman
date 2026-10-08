@@ -114,7 +114,7 @@ public final class ExecutionJournal {
             call.ended = true; call.durationMs = elapsed(call.started); call.rawArguments = ""; call.rawResult = "";
         }
         progress = code != null && code.equals("MAX_ITERATIONS") ? "达到分析轮数上限，可继续完成剩余计划"
-                : terminal.equals("SUCCEEDED") ? "分析完成" : terminal.equals("PARTIAL") ? "分析结束，部分工具未成功"
+                : terminal.equals("SUCCEEDED") ? "分析完成" : terminal.equals("PARTIAL") ? "结果已生成 · 可查看失败记录"
                 : terminal.equals("CANCELLED") ? "分析已停止，已保留进度"
                 : terminal.equals("AWAITING_CONFIRMATION") ? "等待确认分析计划"
                 : "分析未完成，已保留证据与计划";
@@ -131,15 +131,16 @@ public final class ExecutionJournal {
     public synchronized boolean hasUnfinishedPlan() {
         return todos.stream().anyMatch(todo -> !todo.path("status").asText().equals("completed"));
     }
-    /** The model often writes the final report without a last todoWrite; do not treat that missed checkbox as incomplete. */
-    public synchronized void completeInProgressIfReported() {
+    /** Reconcile an omitted last todoWrite only when the final report has query/file evidence and no failed tool. */
+    public synchronized void completeInProgressIfReported(boolean toolsSucceeded) {
         if (text.isBlank() || finalNarrationId == null || todos.isEmpty()) return;
-        if (todos.stream().anyMatch(todo -> "pending".equals(todo.path("status").asText()))) return;
+        if (!toolsSucceeded || evidence.isEmpty()) return;
         todos = todos.stream().map(todo -> {
-            if (!"in_progress".equals(todo.path("status").asText())) return todo;
+            if (!Set.of("in_progress", "pending").contains(todo.path("status").asText())) return todo;
             JsonNode copy = todo.deepCopy();
             if (copy instanceof ObjectNode obj) {
                 obj.put("status", "completed");
+                obj.put("completionSource", "final_report");
                 return obj;
             }
             return todo;

@@ -51,6 +51,8 @@ class RunTraceTest {
                 "metadata", Map.of("todos", java.util.List.of(
                         Map.of("content", "核对订单", "status", "completed"),
                         Map.of("content", "输出最终报告", "status", "in_progress"))))));
+        trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "sql", "toolCallName", "execute_sql", "state", "success",
+                "metadata", Map.of("evidence", Map.of("queryId", "q1")))));
         trace.accept(new StreamEvent("TEXT_BLOCK_DELTA", Map.of("replyId", "final", "delta", "核心结论：2 月收入较 1 月增长。")));
         trace.accept(new StreamEvent("AGENT_END", Map.of()));
         trace.complete();
@@ -59,6 +61,22 @@ class RunTraceTest {
         assertThat(trace.execution().snapshot().todos()).allSatisfy(todo ->
                 assertThat(todo.path("status").asText()).isEqualTo("completed"));
         assertThat(trace.execution().snapshot().progress()).isEqualTo("分析完成");
+    }
+
+    @Test void pendingTodosAreReconciledOnlyForEvidenceBackedSuccessfulReport() {
+        var trace = new RunTrace(1, "s", false);
+        trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "todo", "toolCallName", "todoWrite", "state", "success",
+                "metadata", Map.of("todos", java.util.List.of(Map.of("content", "核对订单", "status", "pending"),
+                        Map.of("content", "输出报告", "status", "pending"))))));
+        trace.accept(new StreamEvent("TOOL_RESULT_END", Map.of("toolCallId", "sql", "toolCallName", "execute_sql", "state", "success",
+                "metadata", Map.of("evidence", Map.of("queryId", "q1")))));
+        trace.accept(new StreamEvent("TEXT_BLOCK_DELTA", Map.of("replyId", "final", "delta", "核心结论：已付款收入增加。")));
+        trace.accept(new StreamEvent("AGENT_END", Map.of())); trace.complete();
+        assertThat(trace.snapshot().status()).isEqualTo("SUCCEEDED");
+        assertThat(trace.execution().snapshot().todos()).allSatisfy(todo -> {
+            assertThat(todo.path("status").asText()).isEqualTo("completed");
+            assertThat(todo.path("completionSource").asText()).isEqualTo("final_report");
+        });
     }
 
     @Test void leftoverPendingTodoStillMarksPlanIncompleteEvenIfReportExists() {

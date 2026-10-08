@@ -9,9 +9,12 @@ import java.io.IOException;
 @Component
 public class AnalysisSkills {
     private final ClasspathSkillRepository repository;
+    private final ClasspathSkillRepository creativeRepository;
     public AnalysisSkills() throws IOException {
         repository = new ClasspathSkillRepository("skills");
+        creativeRepository = new ClasspathSkillRepository("creative-skills");
     }
     public ClasspathSkillRepository repository() { return repository; }
-    @PreDestroy public void close() { repository.close(); }
+    public ClasspathSkillRepository creativeRepository() { return creativeRepository; }
+    @PreDestroy public void close() { repository.close(); creativeRepository.close(); }
 }

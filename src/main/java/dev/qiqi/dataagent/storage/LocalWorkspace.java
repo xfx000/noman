@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.List;
 
 /** Single-node storage. Caller identities always come from the server. All variable keys are hashed. */
 @Component
@@ -26,6 +27,10 @@ public class LocalWorkspace {
     public Path file(String owner, String collection, String id) {
         if (!collection.matches("[a-z-]+")) throw new IllegalArgumentException("Invalid collection");
         return root.resolve("users").resolve(key(owner)).resolve(collection).resolve(key(id) + ".json");
+    }
+    public Path artifactFile(String owner, String collection, String id, String extension) {
+        if (!extension.matches("[a-z0-9]{1,8}")) throw new IllegalArgumentException("Invalid artifact type");
+        return file(owner, collection, id).resolveSibling(key(id) + "." + extension);
     }
     public synchronized void write(String owner, String collection, String id, Object value) {
         Path path = file(owner, collection, id);
@@ -51,6 +56,17 @@ public class LocalWorkspace {
         if (!Files.exists(path)) return Optional.empty();
         try { return Optional.of(json.readValue(path.toFile(), type)); }
         catch (IOException e) { throw new IllegalStateException("Unable to read workspace data", e); }
+    }
+    public synchronized <T> List<T> list(String owner, String collection, Class<T> type) {
+        Path directory = file(owner, collection, "index").getParent();
+        if (!Files.isDirectory(directory)) return List.of();
+        try (var paths = Files.list(directory)) {
+            return paths.filter(path -> Files.isRegularFile(path) && path.getFileName().toString().endsWith(".json"))
+                    .limit(1000).map(path -> {
+                        try { return json.readValue(path.toFile(), type); }
+                        catch (IOException e) { throw new IllegalStateException("Unable to read workspace data", e); }
+                    }).toList();
+        } catch (IOException e) { throw new IllegalStateException("Unable to list workspace data", e); }
     }
     public synchronized void delete(String owner, String collection, String id) {
         try { Files.deleteIfExists(file(owner, collection, id)); }

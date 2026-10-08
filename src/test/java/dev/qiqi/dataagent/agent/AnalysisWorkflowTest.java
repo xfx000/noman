@@ -57,8 +57,8 @@ class AnalysisWorkflowTest {
                             "deliverables", List.of(Map.of("title", "报告", "detail", "给出关键数字")));
                 }
                 else if (step < 30) {
-                    name = step % 2 == 0 ? "validate_sql" : "execute_sql";
-                    args = Map.of("sql", "SELECT COUNT(*) AS total FROM sales_order WHERE total_amount >= " + (step - 4) / 2);
+                    name = "execute_sql";
+                    args = Map.of("sql", "SELECT COUNT(*) AS total FROM sales_order WHERE total_amount >= " + (step - 4));
                 } else return Flux.just(ChatResponse.builder().id("final").finishReason("stop")
                         .content(List.of(TextBlock.builder().text("已核对指标，并保留查询证据。").build())).build());
                 try { return Flux.just(ChatResponse.builder().id("reply-" + step).finishReason("tool_calls")
@@ -91,7 +91,7 @@ class AnalysisWorkflowTest {
         journal.finish("SUCCEEDED", null);
         assertThat(journal.snapshot().tools().getFirst().result()).contains("Qiqi 数据分析工作流", "todoWrite");
         assertThat(journal.snapshot().todos().getFirst().path("status").asText()).isEqualTo("completed");
-        assertThat(journal.snapshot().evidence()).hasSize(13);
+        assertThat(journal.snapshot().evidence()).hasSize(25);
         assertThat(journal.snapshot().tools().stream().filter(tool -> tool.name().equals("execute_sql")))
                 .allSatisfy(tool -> assertThat(tool.arguments()).contains("SELECT COUNT(*)"));
         assertThat(agent.getAgentState(context).getTasksContext().getTasks()).hasSize(1);

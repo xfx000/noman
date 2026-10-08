@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Qiqi DataAgent · 数据分析工作台</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=report-video-1" />
     <script defer src="/vendor/marked.umd.js"></script>
     <script defer src="/vendor/purify.min.js"></script>
-    <script defer src="/app.js"></script>
+    <script defer src="/app.js?v=report-video-1"></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -18,6 +18,11 @@
       <button id="new-chat" class="new-chat">
         <span aria-hidden="true">＋</span> 新建分析
       </button>
+      <nav class="primary-nav" aria-label="工作区">
+        <button id="open-data-center" class="primary-link" type="button"><span aria-hidden="true">▤</span> 数据中心</button>
+      </nav>
+      <button id="history-toggle" class="history-toggle" type="button"
+        aria-controls="history" aria-expanded="false">最近对话</button>
       <div class="nav-label">最近对话 <span id="history-count">0</span></div>
       <nav id="history" class="history-list" aria-label="历史对话"></nav>
       <button
@@ -52,10 +57,9 @@
             <div class="welcome-badge">
               <span class="spark" aria-hidden="true">✦</span> 你的数据分析伙伴
             </div>
-            <h1>让数据，回答你的问题<span>。</span></h1>
+            <h1>你好，我是 <span>Qiqi DataAgent</span></h1>
             <p class="intro">
-              用自然语言探索业务数据。让 Qiqi
-              帮你查询、对比，发现变化背后的线索。
+              帮你查数据、做分析、生成报告，发现变化背后的线索。
             </p>
             <div class="capabilities">
               <span>✓ 真实数据查询</span><span>✓ 按权限访问</span
@@ -100,6 +104,17 @@
               ><span class="dataset-separator">·</span><span>5 张业务表</span>
             </div>
           </section>
+          <section id="data-center-page" class="workspace-page data-center" hidden>
+            <div class="data-center-sidebar">
+              <div class="data-center-heading"><h1>数据中心</h1><div class="data-center-actions"><button id="data-center-refresh" type="button" title="刷新目录" aria-label="刷新目录">↻</button><button id="data-center-add" type="button" title="添加数据" aria-label="添加数据">＋</button></div></div>
+              <label class="data-center-search"><span aria-hidden="true">⌕</span><input id="data-center-search" type="search" placeholder="搜索表或文件" aria-label="搜索表或文件"></label>
+              <div class="data-center-tabs" role="tablist" aria-label="数据类型"><button id="data-tab-tables" type="button" class="active" role="tab" aria-selected="true">数据源</button><button id="data-tab-files" type="button" role="tab" aria-selected="false">用户文件</button></div>
+              <p id="data-center-scope" class="data-center-scope">当前账号可查询的数据表</p>
+              <div id="data-center-content" class="data-center-list" role="listbox" aria-label="数据目录">正在读取数据目录…</div>
+            </div>
+            <div id="data-center-detail" class="data-center-detail" aria-live="polite"></div>
+            <input id="data-center-upload" type="file" accept=".csv,.xlsx,.xls" class="sr-only" aria-label="上传数据文件">
+          </section>
           <section
             id="messages"
             class="messages"
@@ -116,40 +131,56 @@
           <textarea
             id="query"
             rows="2"
-            placeholder="有什么想了解的数据？输入你的问题…"
+            placeholder="输入你的数据问题…（Shift + Enter 换行）"
             maxlength="8000"
             required
           ></textarea>
-          <div class="composer-options">
-            <label class="online-option">
-              <input type="checkbox" id="online-search" class="sr-only" aria-describedby="online-hint" disabled>
-              <svg class="composer-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>
-              <span>联网搜索</span><span class="online-indicator" aria-hidden="true"></span>
-            </label>
-            <span class="online-help">
-              <button type="button" class="online-help-button" aria-label="联网搜索说明" aria-describedby="online-hint">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg>
-              </button>
-              <span id="online-hint" role="tooltip">正在检查搜索服务…</span>
-            </span>
-            <label class="file-upload-label">
-              <svg class="composer-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8"/><path d="m6 14 8-8"/></svg>
-              <span>上传 CSV</span><input id="file-upload" type="file" accept=".csv,text/csv" class="sr-only">
-            </label>
-            <span id="file-status" role="status"></span>
+          <div id="file-attachment" class="file-attachment">
+            <span aria-hidden="true">▤</span><span id="file-status" role="status"></span>
+            <button id="remove-file" type="button" aria-label="移除已选文件" title="移除已选文件">×</button>
           </div>
-          <div class="composer-bottom">
-            <span id="status" role="status" aria-live="polite">正在连接…</span>
+          <div class="composer-toolbar">
+            <div class="composer-tools">
+              <label class="file-upload-label" title="上传数据文件" aria-label="上传数据文件">
+                <span aria-hidden="true">＋</span><span class="sr-only">上传数据</span>
+                <input id="file-upload" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="sr-only">
+              </label>
+              <div class="composer-options">
+                <button id="more-input-options" type="button" title="更多输入选项" aria-label="更多输入选项" aria-expanded="false" aria-controls="composer-options-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.5" fill="white"/><circle cx="15" cy="17" r="2.5" fill="white"/></svg></button>
+                <div id="composer-options-menu" class="composer-options-menu" hidden>
+                  <label class="online-option">
+                    <input type="checkbox" id="online-search" class="sr-only" aria-describedby="online-hint" disabled>
+                    <svg class="composer-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>
+                    <span>联网搜索</span><span class="online-indicator" aria-hidden="true"></span>
+                  </label>
+                  <p id="online-hint">正在检查搜索服务…</p>
+                </div>
+              </div>
+              <span class="composer-divider" aria-hidden="true"></span>
+              <div class="analysis-mode-picker">
+              <select id="analysis-mode" hidden aria-hidden="true" tabindex="-1">
+                <option value="AUTO">自动</option>
+                <option value="FAST">快速执行</option>
+                <option value="REVIEW">先确认方案</option>
+              </select>
+              <button id="analysis-mode-trigger" class="analysis-mode-trigger" type="button" aria-label="执行方式：自动" aria-haspopup="menu" aria-expanded="false" aria-controls="analysis-mode-menu" title="只影响本次分析；数据库权限和 SQL 校验始终生效"><span class="mode-spark" aria-hidden="true">✧</span><span id="analysis-mode-label">自动</span><span class="mode-chevron" aria-hidden="true">⌄</span></button>
+              <div id="analysis-mode-menu" class="analysis-mode-menu" role="menu" aria-label="执行方式" hidden>
+                <button type="button" role="menuitemradio" aria-checked="true" data-mode="AUTO"><strong>自动</strong><small>根据问题安排分析步骤</small></button>
+                <button type="button" role="menuitemradio" aria-checked="false" data-mode="FAST"><strong>快速执行</strong><small>直接执行并生成结果</small></button>
+                <button type="button" role="menuitemradio" aria-checked="false" data-mode="REVIEW"><strong>先确认方案</strong><small>确认计划后再执行</small></button>
+              </div>
+              </div>
+            </div>
             <div class="composer-controls">
-              <span class="keyboard-hint">Enter 发送 · Shift + Enter 换行</span
-              ><button id="stop" class="stop-button" type="button" hidden>
-                ■ 停止生成</button
-              ><button id="send" class="send-button" type="submit" disabled>
-                <span>开始分析</span><span aria-hidden="true">↑</span>
+              <button id="stop" class="stop-button" type="button" aria-label="停止生成" title="停止生成" hidden>
+                ■</button
+              ><button id="send" class="send-button" type="submit" aria-label="开始分析" title="开始分析" disabled>
+                <span aria-hidden="true">↑</span>
               </button>
             </div>
           </div>
         </form>
+        <div class="composer-meta"><span id="status" role="status" aria-live="polite">正在连接…</span></div>
       </div>
     </main>
     <section
@@ -176,6 +207,12 @@
           </button>
           <button class="settings-tab" data-settings-tab="database">
             <span aria-hidden="true">▤</span> 数据库
+          </button>
+          <button class="settings-tab" data-settings-tab="creative">
+            <span aria-hidden="true">✦</span> 创意功能
+          </button>
+          <button class="settings-tab" data-settings-tab="memory">
+            <span aria-hidden="true">◇</span> 记忆管理
           </button>
         </nav>
         <p class="settings-nav-caption">Qiqi · 你的数据工作台</p>
@@ -349,9 +386,40 @@
               </p>
             </section>
           </div>
+          <div data-settings-panel="creative" hidden>
+            <div class="settings-status" id="creative-load-status" role="status"></div>
+            <form id="creative-settings-form" class="settings-card config-form">
+              <h2>HyperFrames 视频创意 skill</h2>
+              <p>开启后，在消息开头输入 <code>/hyperframes</code> 才会进入视频创作流程。</p>
+              <div class="settings-row">
+                <div><label for="hyperframes-enabled">允许使用 HyperFrames skill</label>
+                  <p>可生成分镜与 HTML 草案；当前应用尚不渲染 MP4。</p></div>
+                <input id="hyperframes-enabled" class="settings-switch" type="checkbox" role="switch" disabled />
+              </div>
+              <div class="config-footer"><span>保存后立即生效</span><button type="submit" class="settings-save">保存创意功能</button></div>
+            </form>
+          </div>
+          <div data-settings-panel="memory" hidden>
+            <section class="settings-card">
+              <h2>记忆管理 <span class="setting-badge">规划中</span></h2>
+              <p>当前不会自动提取或保存长期对话记忆。</p>
+              <div class="memory-placeholder"><strong>记忆湖接入 · 待办</strong><span>待明确内部服务、接口、权限和保留策略后，再提供记忆查看、修改与删除。</span></div>
+            </section>
+          </div>
         </div>
       </div>
     </section>
+    <dialog id="report-preview-dialog" class="report-preview-dialog" aria-label="报告预览">
+      <div class="report-preview-toolbar">
+        <div><strong>报告预览</strong><span>可展开图表和数据表，打印时可保存为 PDF</span></div>
+        <div class="report-preview-actions">
+          <button type="button" id="download-html-report">下载 HTML</button>
+          <button type="button" id="print-html-report">打印 / 保存 PDF</button>
+          <button type="button" id="close-report-preview" aria-label="关闭预览">×</button>
+        </div>
+      </div>
+      <iframe id="report-preview-frame" title="数据分析报告" sandbox="allow-same-origin allow-modals"></iframe>
+    </dialog>
     <dialog
       id="delete-dialog"
       class="delete-dialog"

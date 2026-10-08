@@ -37,6 +37,7 @@ class DataAgentToolkitTest {
                 int step = calls.getAndIncrement();
                 var names = tools.stream().map(ToolSchema::getName).toList();
                 assertThat(names).contains("execute_sql", "reset_equipped_tools", "generate_chart", "todoWrite");
+                assertThat(names).doesNotContain("validate_sql");
                 if (step == 0) {
                     assertThat(names).doesNotContain("web_search");
                     return invoke("reset_equipped_tools", Map.of("to_activate", List.of("web")), step);

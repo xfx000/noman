@@ -1,6 +1,7 @@
 package dev.qiqi.dataagent.web;
 
 import dev.qiqi.dataagent.agent.DataAgentService;
+import dev.qiqi.dataagent.agent.CreativeFeature;
 import dev.qiqi.dataagent.plan.AnalysisPlan;
 import dev.qiqi.dataagent.plan.AnalysisPlanGate;
 import dev.qiqi.dataagent.plan.SubmitAnalysisPlanTool;
@@ -42,6 +43,7 @@ import java.util.UUID;
 @RequestMapping("/api")
 public class ChatController {
     private final DataAgentService agent;
+    private final CreativeFeature creative;
     private final IdentityService identities;
     private final AgentEventMapper eventMapper;
     private final ChartProperties charts;
@@ -51,9 +53,10 @@ public class ChatController {
     private final AnalysisPlanGate plans;
     private final Duration runTimeout;
 
-    public ChatController(DataAgentService agent, IdentityService identities, AgentEventMapper eventMapper, ChartProperties charts, WebSearchProperties webSearch, RunTraceStore traces, dev.qiqi.dataagent.agent.RunCoordinator coordinator, AnalysisPlanGate plans,
+    public ChatController(DataAgentService agent, CreativeFeature creative, IdentityService identities, AgentEventMapper eventMapper, ChartProperties charts, WebSearchProperties webSearch, RunTraceStore traces, dev.qiqi.dataagent.agent.RunCoordinator coordinator, AnalysisPlanGate plans,
                           @org.springframework.beans.factory.annotation.Value("${qiqi.model.run-timeout:10m}") Duration runTimeout) {
         this.agent = agent;
+        this.creative = creative;
         this.identities = identities;
         this.eventMapper = eventMapper;
         this.charts = charts;
@@ -80,6 +83,11 @@ public class ChatController {
 
         if (request.online() && !webSearch.configured())
             throw new IllegalArgumentException("联网搜索尚未配置，请关闭联网开关或配置服务端 Tavily Key。");
+        boolean useCreative = creative.invoked(request.query());
+        if (useCreative && !creative.enabled())
+            throw new IllegalArgumentException("请先在设置 → 创意功能中开启 HyperFrames skill。");
+        if (useCreative && request.plan() != null)
+            throw new IllegalArgumentException("请先完成当前分析计划，再单独发起 /hyperframes 消息。");
 
         return Flux.defer(() -> {
             RunTrace trace = traces.start(identity.id(), conversationId, request.online());
@@ -92,11 +100,15 @@ public class ChatController {
             String userId = Long.toString(identity.id());
             String sessionId = LocalWorkspace.key(conversationId);
             var pending = plans.pending(userId, sessionId);
+            if (useCreative && pending != null)
+                throw new IllegalArgumentException("当前会话有待确认的分析计划，请先完成后再使用 /hyperframes。");
             boolean resumePlan = pending != null || request.plan() != null;
             if (!resumePlan) plans.clearRound(userId, sessionId);
             Flux<StreamEvent> events = Flux.defer(() -> (resumePlan
-                    ? agent.stream(resumeMessage(request, userId, sessionId, pending), conversationId, identity, request.online(), handle.cancellation())
-                    : agent.stream(request.query().trim(), conversationId, identity, request.online(), handle.cancellation())))
+                    ? agent.stream(resumeMessage(request, userId, sessionId, pending), conversationId, identity, request.online(), request.analysisMode(), handle.cancellation())
+                    : useCreative
+                    ? agent.stream(new UserMessage(request.query().trim()), conversationId, identity, request.online(), request.analysisMode(), true, handle.cancellation())
+                    : agent.stream(new UserMessage(request.query().trim()), conversationId, identity, request.online(), request.analysisMode(), handle.cancellation())))
                     .publishOn(reactor.core.scheduler.Schedulers.boundedElastic())
                     .concatMap(raw -> {
                         if (raw instanceof RequireUserConfirmEvent confirm) {

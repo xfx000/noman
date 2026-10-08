@@ -35,9 +35,10 @@ public class LocalSettingsService {
         try {
             Properties saved = read();
             boolean pending = saved.stringPropertyNames().stream().anyMatch(key ->
-                    !Objects.equals(saved.getProperty(key), env.getProperty(key)));
+                    !key.equals("qiqi.creative.hyperframes.enabled") && !Objects.equals(saved.getProperty(key), env.getProperty(key)));
             String url = env.getProperty("spring.datasource.url", "");
             return Map.of("restartRequired", pending,
+                "creative", Map.of("hyperframesEnabled", Boolean.parseBoolean(value(saved,"qiqi.creative.hyperframes.enabled","false"))),
                 "model", Map.of("provider", value(saved,"qiqi.model.provider","dashscope"),
                     "baseUrl", value(saved,"qiqi.model.base-url",""),
                     "name", value(saved,"qiqi.model.name","qwen-plus"),
@@ -50,6 +51,14 @@ public class LocalSettingsService {
     }
     public record ModelInput(String provider, String baseUrl, String name, String apiKey) {}
     public record DatabaseInput(int maxRows, int timeoutSeconds) {}
+    public record CreativeInput(boolean hyperframesEnabled) {}
+    public synchronized boolean hyperframesEnabled() {
+        try { return Boolean.parseBoolean(value(read(), "qiqi.creative.hyperframes.enabled", "false")); }
+        catch (IOException e) { throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,"无法读取本地设置"); }
+    }
+    public synchronized void saveCreative(CreativeInput input) {
+        save(Map.of("qiqi.creative.hyperframes.enabled", Boolean.toString(input.hyperframesEnabled())));
+    }
     public synchronized void saveModel(ModelInput input) {
         if (!Set.of("openai","dashscope").contains(Objects.toString(input.provider(),"")))
             throw new IllegalArgumentException("请选择有效的模型接口");

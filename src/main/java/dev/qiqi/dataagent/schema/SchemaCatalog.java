@@ -31,6 +31,18 @@ public class SchemaCatalog {
         return tables;
     }
 
+    public Map<String, Object> inspect() {
+        String databaseProduct;
+        try (var connection = dataSource.getConnection()) {
+            databaseProduct = connection.getMetaData().getDatabaseProductName();
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to inspect exposed schema", e);
+        }
+        return Map.of(
+                "databaseProduct", databaseProduct,
+                "tables", listTables().stream().map(table -> describe(table.get("name").toString())).toList());
+    }
+
     public Map<String, Object> describe(String requested) {
         String table = requested == null ? "" : requested.trim().toLowerCase(Locale.ROOT);
         if (!properties.exposedTables().contains(table)) {
@@ -64,6 +76,7 @@ public class SchemaCatalog {
             }
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("name", table);
+            result.put("databaseProduct", metadata.getDatabaseProductName());
             result.put("description", description(table));
             result.put("columns", columns);
             result.put("foreignKeys", foreignKeys);
@@ -75,12 +88,12 @@ public class SchemaCatalog {
 
     private static String description(String table) {
         return switch (table) {
-            case "department" -> "Sales department dimension";
-            case "customer" -> "Customer master data";
-            case "product" -> "Product catalog and category";
-            case "sales_order" -> "Order facts including date, customer, department and total amount";
-            case "sales_order_item" -> "Line items belonging to sales orders";
-            default -> "Business table";
+            case "department" -> "销售部门";
+            case "customer" -> "客户资料";
+            case "product" -> "商品与品类";
+            case "sales_order" -> "订单日期、客户、部门及金额";
+            case "sales_order_item" -> "订单商品明细";
+            default -> "业务数据表";
         };
     }
 }

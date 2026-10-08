@@ -39,6 +39,16 @@ class LocalSettingsTest {
         assertThatThrownBy(()->settings.saveModel(new LocalSettingsService.ModelInput("openai","https://user:password@example.com","model",""))).isInstanceOf(IllegalArgumentException.class);
         assertThat(directory.resolve("application-local.properties")).doesNotExist();
     }
+    @Test void creativeOptInIsOffByDefaultAndTakesEffectWithoutRestart() {
+        var settings = service();
+        assertThat(settings.hyperframesEnabled()).isFalse();
+        settings.saveCreative(new LocalSettingsService.CreativeInput(true));
+        assertThat(settings.hyperframesEnabled()).isTrue();
+        assertThat(((Map<?,?>) settings.view().get("creative")).get("hyperframesEnabled")).isEqualTo(true);
+        assertThat(settings.view().get("restartRequired")).isEqualTo(false);
+        settings.saveCreative(new LocalSettingsService.CreativeInput(false));
+        assertThat(settings.hyperframesEnabled()).isFalse();
+    }
     @Test void onlySameOriginLocalRequestsCanAccessSettings() {
         var controller=new LocalSettingsController(service());
         var local=new InetSocketAddress("127.0.0.1",1234);

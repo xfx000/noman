@@ -10,7 +10,7 @@ import java.util.Map;
 /** 按用户和会话记住本轮是否已交计划、上次确认的计划，以及正在等待确认的调用。 */
 @Service
 public class AnalysisPlanGate {
-    public static final String BLOCKED_MESSAGE = "请先探查表结构并提交分析计划";
+    public static final String BLOCKED_MESSAGE = "本轮计划尚未记录或确认；先探查表结构，再调用 record_analysis_plan 或 submit_analysis_plan。此查询未执行。";
     static final String COLLECTION = "analysis-plans";
 
     private final LocalWorkspace workspace;

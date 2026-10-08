@@ -22,6 +22,13 @@ public class CatalogTools {
         return json(catalog.listTables());
     }
 
+    @Tool(name = "inspect_schema",
+            description = "Inspect all exposed tables, their real columns and foreign keys, and the database product in one call before writing SQL.",
+            readOnly = true)
+    public String inspectSchema() {
+        return json(catalog.inspect());
+    }
+
     @Tool(name = "describe_table",
             description = "Describe the real columns and foreign keys of one exposed table before writing SQL.",
             readOnly = true)

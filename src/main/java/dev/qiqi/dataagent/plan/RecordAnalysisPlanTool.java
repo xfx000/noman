@@ -25,9 +25,8 @@ public class RecordAnalysisPlanTool implements AgentTool {
 
     @Override public String getName() { return NAME; }
     @Override public String getDescription() {
-        return "记录分析计划并立即开始执行，不暂停。"
-                + "只用于单指标、没有待确认假设、不出图表也不出报告；"
-                + "或者追问只改维度、时间范围、筛选条件，且没有新指标、没有新增图表或报告。"
+        return "记录分析计划并立即开始执行，不暂停。自动模式只用于简单单指标或不扩展指标及产出的追问；"
+                + "快速模式可用于能通过数据核实假设的任务；只有需用户决定业务口径时应提交计划。先确认方案模式不可用。"
                 + "不满足时本工具会拒绝，应改用 submit_analysis_plan。";
     }
     @Override public Map<String, Object> getParameters() {
@@ -49,7 +48,9 @@ public class RecordAnalysisPlanTool implements AgentTool {
         AnalysisPlan plan = AnalysisPlan.fromInput(param.getInput());
         String invalid = AnalysisPlanReview.invalid(plan);
         if (invalid != null) return ToolResultBlock.error(invalid);
-        String reject = AnalysisPlanReview.needsUserConfirmation(plan, gate.confirmed(context.getUserId(), context.getSessionId()));
+        AnalysisMode mode = context.get(AnalysisMode.class);
+        String reject = AnalysisPlanReview.needsUserConfirmation(plan,
+                gate.confirmed(context.getUserId(), context.getSessionId()), mode);
         if (reject != null) return ToolResultBlock.error(reject);
         gate.accept(context.getUserId(), context.getSessionId(), plan);
         return ToolResultBlock.text(RECORDED);

@@ -28,7 +28,7 @@ public class ValidateSqlAgentTool implements AgentTool {
 
     @Override public String getName() { return "validate_sql"; }
     @Override public String getDescription() {
-        return "Validate one read-only SQL statement, enforce the table allowlist and cap its LIMIT. Call before execute_sql.";
+        return "Only after a plan has been recorded or confirmed: validate one read-only SQL statement, enforce the table allowlist and cap its LIMIT. Call before execute_sql.";
     }
     @Override public Map<String, Object> getParameters() {
         return Map.of("type", "object", "additionalProperties", false,

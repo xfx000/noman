@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dev.qiqi.dataagent.chart.ChartArtifactStore;
 import dev.qiqi.dataagent.chart.ChartQueryStore;
 import dev.qiqi.dataagent.identity.IdentityService;
+import dev.qiqi.dataagent.schema.SchemaCatalog;
 import dev.qiqi.dataagent.storage.CsvExport;
 import dev.qiqi.dataagent.storage.LocalWorkspace;
 import org.springframework.http.*;
@@ -20,11 +21,18 @@ public class WorkspaceController {
     private final ChartArtifactStore charts;
     private final ChartQueryStore evidence;
     private final dev.qiqi.dataagent.files.CsvFiles files;
-    public WorkspaceController(LocalWorkspace workspace, IdentityService identities, ChartArtifactStore charts, ChartQueryStore evidence, dev.qiqi.dataagent.files.CsvFiles files) {
-        this.workspace = workspace; this.identities = identities; this.charts = charts; this.evidence = evidence; this.files = files;
+    private final SchemaCatalog schema;
+    public WorkspaceController(LocalWorkspace workspace, IdentityService identities, ChartArtifactStore charts, ChartQueryStore evidence, dev.qiqi.dataagent.files.CsvFiles files, SchemaCatalog schema) {
+        this.workspace = workspace; this.identities = identities; this.charts = charts; this.evidence = evidence; this.files = files; this.schema = schema;
     }
     private String owner(String username) { return Long.toString(identities.findActiveByUsername(username)
             .orElseThrow(() -> new SecurityException("Unknown or inactive demo user")).id()); }
+
+    @GetMapping("/data-center")
+    public Map<String, Object> dataCenter(@RequestHeader("X-Qiqi-User") String username) {
+        owner(username);
+        return schema.inspect();
+    }
 
     @GetMapping("/history")
     public synchronized History history(@RequestHeader("X-Qiqi-User") String username) {
@@ -63,11 +71,24 @@ public class WorkspaceController {
     @PostMapping("/files")
     public Map<String,Object> upload(@RequestHeader("X-Qiqi-User") String username, @RequestBody Upload request) {
         String owner = owner(username);
-        var table = files.upload(owner, LocalWorkspace.key(request.conversationId()), request.name(), request.content());
+        String name = request.name() == null ? "" : request.name().toLowerCase(java.util.Locale.ROOT);
+        var table = name.endsWith(".csv")
+                ? files.upload(owner, LocalWorkspace.key(request.conversationId()), request.name(), request.content())
+                : files.uploadWorkbook(owner, LocalWorkspace.key(request.conversationId()), request.name(), decodeWorkbook(request.base64()));
         var preview = files.analyze(table, "preview", null, null);
         evidence.remember(owner, LocalWorkspace.key(request.conversationId()), preview);
         return Map.of("fileId", table.id(), "name", table.name(), "columns", table.columns(), "totalRows", table.rows().size(), "preview", preview);
     }
-    public record Upload(String conversationId, String name, String content) {}
+    @GetMapping("/files")
+    public java.util.List<dev.qiqi.dataagent.files.CsvFiles.FileSummary> files(
+            @RequestHeader("X-Qiqi-User") String username, @RequestParam String conversationId) {
+        return files.list(owner(username), LocalWorkspace.key(conversationId));
+    }
+    private static byte[] decodeWorkbook(String base64) {
+        if (base64 == null || base64.length() > 2_800_000) throw new IllegalArgumentException("Excel 文件不能超过 2 MB。");
+        try { return Base64.getDecoder().decode(base64); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException("Excel 文件编码无效。"); }
+    }
+    public record Upload(String conversationId, String name, String content, String base64) {}
     public record History(long revision, JsonNode data) {}
 }

@@ -42,4 +42,8 @@ public class LocalSettingsController {
     public Mono<Map<String,Object>> database(ServerHttpRequest request,@RequestBody LocalSettingsService.DatabaseInput input) {
         check(request);return Mono.fromCallable(()-> {service.saveDatabase(input);return service.view();}).subscribeOn(Schedulers.boundedElastic());
     }
+    @PostMapping(value="/creative", consumes="application/json")
+    public Mono<Map<String,Object>> creative(ServerHttpRequest request,@RequestBody LocalSettingsService.CreativeInput input) {
+        check(request); return Mono.fromCallable(()-> {service.saveCreative(input);return service.view();}).subscribeOn(Schedulers.boundedElastic());
+    }
 }

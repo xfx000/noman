@@ -26,6 +26,13 @@ public final class AnalysisPlanReview {
     }
 
     public static String needsUserConfirmation(AnalysisPlan incoming, AnalysisPlan confirmed) {
+        return needsUserConfirmation(incoming, confirmed, AnalysisMode.AUTO);
+    }
+
+    public static String needsUserConfirmation(AnalysisPlan incoming, AnalysisPlan confirmed, AnalysisMode mode) {
+        mode = AnalysisMode.orAuto(mode);
+        if (mode == AnalysisMode.REVIEW) return NEED_SUBMIT;
+        if (mode == AnalysisMode.FAST) return null;
         if (confirmed == null) {
             if (incoming.metrics().size() > 1 || !incoming.assumptions().isEmpty() || hasChart(incoming) || hasReport(incoming))
                 return NEED_SUBMIT;

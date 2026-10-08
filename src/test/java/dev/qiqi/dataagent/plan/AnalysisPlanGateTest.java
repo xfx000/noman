@@ -33,6 +33,11 @@ class AnalysisPlanGateTest {
                 .isEqualTo(AnalysisPlanReview.NEED_METRICS);
         assertThat(AnalysisPlanReview.needsUserConfirmation(broad(), null)).isEqualTo(AnalysisPlanReview.NEED_SUBMIT);
         assertThat(AnalysisPlanReview.needsUserConfirmation(single(), null)).isNull();
+        assertThat(AnalysisPlanReview.needsUserConfirmation(single(), null, AnalysisMode.REVIEW)).isEqualTo(AnalysisPlanReview.NEED_SUBMIT);
+        assertThat(AnalysisPlanReview.needsUserConfirmation(broad(), null, AnalysisMode.FAST)).isNull();
+        var explicit = new AnalysisPlan(broad().metrics(), broad().dimensions(), broad().timeRange(), broad().tables(),
+                List.of(), broad().outputs(), broad().title(), broad().sections(), broad().deliverables());
+        assertThat(AnalysisPlanReview.needsUserConfirmation(explicit, null, AnalysisMode.FAST)).isNull();
         gate.accept("1", "s", broad());
         gate.clearRound("1", "s");
         assertThat(gate.isRoundOpen("1", "s")).isFalse();

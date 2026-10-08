@@ -288,7 +288,13 @@ Agent 自动评分和 BIRD 数据集评测暂不在当前范围；安全与功�
 
 ### 本机设置页
 
-设置采用独立分类导航：外观、AI 模型与 Key、数据库。
+设置采用独立分类导航：外观、AI 模型与 Key、数据库、创意功能。
+
+创意功能中的 HyperFrames skill 默认关闭。以 `local` 配置启动的本机服务可在设置页开启；开启后只有消息以 `/hyperframes` 开头才进入自由视频创作流程，例如 `/hyperframes 做一个 10 秒产品片头，16:9，深蓝色调`。该流程使用独立的 skill 仓库和会话状态，只生成分镜与 HyperFrames HTML 草案。
+
+开启创意功能后，另一条 `report-video` skill 钩子会在有真实数值查询证据的已完成报告上询问是否制作短视频。用户点击“用 HyperFrames 生成”后，服务端从该用户、该会话的 `queryId` 结果制作 15 秒固定模板视频，展示数值、前五项对比和证据编号；视频通过鉴权接口预览和下载。未点击不会运行渲染。截断查询只标记为预览，当前版本不生成配音，也不推断指标变化的业务原因。
+
+本地渲染需要 Node.js 22+ 和可工作的 FFmpeg/FFprobe。首次使用前在项目根目录运行 `npm ci --prefix tools/report-video`，安装锁定版本的 HyperFrames。若系统默认 FFmpeg 不可用，可在 git 忽略的 `application-local.properties` 中设置 `qiqi.creative.hyperframes.ffmpeg-dir=/path/to/ffmpeg/bin`，然后重启服务。服务器运行时不自动下载 npm 包。上述视频钩子仅限当前单机工作区；公开部署前仍需替换演示身份入口，并规划渲染队列及文件保留期。
 外观与打字效果立即生效，保存在浏览器；模型连接和查询限制写入项目根目录
 `application-local.properties`，使用 `local` profile 重启服务后生效。
 该文件已被 Git 忽略，权限为仅文件所有者可读写。配置优先于同目录的

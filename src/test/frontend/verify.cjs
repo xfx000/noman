@@ -50,7 +50,7 @@ async function setup(handler, stored = {}, meta = {}) {
   for (const f of ["vendor/marked.umd.js", "vendor/purify.min.js", "app.js"])
     w.eval(
       readFileSync(root + f, "utf8") +
-        (f === "app.js" ? "\nwindow.send = send;" : ""),
+        (f === "app.js" ? "\nwindow.send = send; window.visualTest = { createResponse, addEvidence, portableHtmlReport, paintResponse, state };" : ""),
     );
   await new Promise((r) => setTimeout(r, 10));
   return w;
@@ -91,7 +91,8 @@ function controlledStream() {
         { id: "plan", name: "todoWrite", status: "SUCCEEDED", arguments: '{"todos":[]}', result: "计划已更新", durationMs: 5 },
         { id: "sql", name: "execute_sql", status: "SUCCEEDED", arguments: '{"sql":"SELECT COUNT(*) FROM sales_order"}',
           result: '<img src=x onerror=alert(1)> queryId=q1', durationMs: 30 },
-        { id: "bad", name: "web_search", status: "FAILED", arguments: '{"query":"public"}', result: "WEB_TIMEOUT", durationMs: 100 }
+        { id: "bad", name: "web_search", status: "FAILED", arguments: '{"query":"public"}', result: "WEB_TIMEOUT", durationMs: 100 },
+        { id: "fragment", name: "__fragment__", status: "INCOMPLETE", arguments: "", result: "", durationMs: 1000 }
       ], todos: [{ id: "t1", content: "核对订单", status: "completed" }, { id: "t2", content: "核对外部资料", status: "pending" }],
       evidence: [{ queryId: "q1", executedSql: "SELECT COUNT(*) FROM sales_order", rowCount: 1, durationMs: 30 }], charts: [], sources: [],
       narrations: [
@@ -106,6 +107,7 @@ function controlledStream() {
         { kind: "tool", id: "plan" },
         { kind: "tool", id: "sql" },
         { kind: "tool", id: "bad" },
+        { kind: "tool", id: "fragment" },
         { kind: "text", id: "text:final" },
       ] };
     return streamed(events([
@@ -126,16 +128,29 @@ function controlledStream() {
   assert.match(timelineDocument.querySelectorAll(".tool-payload")[0].textContent, /SELECT COUNT/);
   assert.equal(timelineDocument.querySelectorAll(".tool-detail img").length, 0);
   assert.match(timelineDocument.querySelector(".tool-step.failed").textContent, /WEB_TIMEOUT/);
-  assert.match(timelineDocument.querySelector(".analysis-narrative").textContent, /正在核对已付款订单口径/);
-  assert.equal(timelineDocument.querySelector(".execution-details").open, true);
+  assert.match(timelineDocument.querySelector(".narration-step").textContent, /正在核对已付款订单口径/);
+  assert.equal(timelineDocument.querySelector(".analysis-narrative").hidden, true);
+  assert.deepEqual([...timelineDocument.querySelector(".execution-list").children].map(node =>
+    node.classList.contains("narration-step") ? "说明" : "工具"), ["说明", "工具", "工具"]);
+  assert.ok(timelineDocument.querySelector(".execution-details").compareDocumentPosition(
+    timelineDocument.querySelector(".final-result")) & timelineDocument.defaultView.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(timelineDocument.querySelector(".run-diagnostics").compareDocumentPosition(
+    timelineDocument.querySelector(".final-result")) & timelineDocument.defaultView.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(timelineDocument.querySelector(".execution-details").open, false);
+  assert.equal(timelineDocument.querySelector(".tool-step.failed .tool-detail").open, false);
   assert.match(timelineDocument.querySelector(".execution-summary").textContent, /2 次执行.*1 项未成功/);
+  assert.doesNotMatch(timelineDocument.querySelector(".execution-details").textContent, /__fragment__/);
+  timelineDocument.querySelector("#history-toggle").click();
+  assert.equal(timelineDocument.querySelector("#history-toggle").getAttribute("aria-expanded"), "true");
+  assert.equal(timelineDocument.querySelector(".sidebar").classList.contains("history-expanded"), true);
   assert.equal(timelineDocument.querySelectorAll(".timeline-item").length, 0);
   assert.match(timelineDocument.querySelector(".final-result").textContent, /已有真实查询证据/);
+  assert.equal(timelineDocument.querySelector(".final-result").classList.contains("typing"), false);
   assert.doesNotMatch(timelineDocument.querySelector(".message.assistant").textContent, /思考过程|private chain/);
   assert.deepEqual(
     [...timelineDocument.querySelector(".final-result").children].map((node) => node.className),
-    ["result-conclusion", "chart-results", "report-body markdown-body",
-      "web-sources", "query-evidence", "report-actions"],
+    ["result-conclusion", "chart-results", "data-views", "report-body markdown-body",
+      "web-sources", "query-evidence", "report-video-offer", "report-actions"],
   );
   assert.equal(timelineDocument.querySelectorAll(".evidence-item").length, 1);
   const timelineSaved = timeline.localStorage.getItem("qiqi.conversations.v1.admin");
@@ -146,6 +161,81 @@ function controlledStream() {
   assert.match(timelineRestored.document.querySelector(".todo-panel").textContent, /核对订单/);
   assert.match(timelineRestored.document.querySelector(".final-result").textContent, /已有真实查询证据/);
   timelineRestored.close();
+  const liveStream = controlledStream();
+  let liveConversation;
+  const liveTimeline = await setup((options) => {
+    liveConversation = JSON.parse(options.body).conversationId;
+    return liveStream.response;
+  }, {}, { executionEnabled: true });
+  const liveRun = liveTimeline.send("检查过程顺序");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const liveBase = { version: 1, runId: "bbbbbbbb-1234-1234-1234-123456789abc",
+    conversationId: liveConversation, revision: 1, status: "RUNNING", progress: "正在查询", text: "",
+    todos: [], evidence: [], charts: [], sources: [],
+    tools: [{ id: "sql", name: "execute_sql", status: "RUNNING", arguments: "{}", result: "", durationMs: 10 }],
+    narrations: [{ id: "text:stage", kind: "text", content: "先确认订单状态。" }],
+    steps: [{ kind: "text", id: "text:stage" }, { kind: "tool", id: "sql" }] };
+  liveStream.emit(ev("EXECUTION_UPDATE", { execution: liveBase }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const liveDoc = liveTimeline.document;
+  assert.equal(liveDoc.querySelector(".execution-details").open, true);
+  assert.deepEqual([...liveDoc.querySelector(".execution-list").children].map(node =>
+    node.classList.contains("narration-step") ? "说明" : "工具"), ["说明", "工具"]);
+  assert.equal(liveDoc.querySelector(".analysis-narrative").hidden, true);
+  let processRemounts = 0;
+  const processObserver = new liveTimeline.MutationObserver(records => {
+    processRemounts += records.filter(record => record.type === "childList").length;
+  });
+  processObserver.observe(liveDoc.querySelector(".execution-list"), { childList: true });
+  liveStream.emit(ev("EXECUTION_UPDATE", { execution: { ...liveBase, revision: 2,
+    narrations: [{ id: "text:stage", kind: "text", content: "先确认订单状态，再核对范围。" }] } }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(processRemounts, 0);
+  processObserver.disconnect();
+  liveStream.emit(ev("TEXT_BLOCK_DELTA", { replyId: "final", delta: "## 核心结论\n订单收入上升。" }));
+  liveStream.emit(ev("AGENT_END"));
+  liveStream.emit(ev("EXECUTION_UPDATE", { execution: { ...liveBase, revision: 3, status: "SUCCEEDED",
+    finalNarrationId: "text:final", narrations: [...liveBase.narrations,
+      { id: "text:final", kind: "text", content: "## 核心结论\n订单收入上升。" }],
+    steps: [...liveBase.steps, { kind: "text", id: "text:final" }] } }));
+  liveStream.close();
+  await liveRun;
+  assert.equal(liveDoc.querySelector(".execution-details").open, false);
+  assert.equal(liveDoc.querySelectorAll(".narration-step").length, 1);
+  assert.match(liveDoc.querySelector(".final-result").textContent, /订单收入上升/);
+  liveTimeline.close();
+  console.log("PASS live process order, final report placement and automatic collapse");
+  let videoRenderCalls = 0;
+  const videoRunId = "cccccccc-1234-1234-1234-123456789abc";
+  const videoHook = await setup((options, url) => {
+    if (url.endsWith("/video-offer")) return { ok: true, json: async () =>
+      ({ available: true, queryId: "verified-query", videoId: null }) };
+    if (url.endsWith("/video") && options.method === "POST") {
+      videoRenderCalls++;
+      return { ok: true, json: async () => ({ id: "video-1" }) };
+    }
+    if (url.endsWith("/video/video-1")) return { ok: true, blob: async () => new Blob(["video"]) };
+    return streamed(events([
+      ev("RUN_START", { run: { runId: videoRunId, status: "RUNNING", durationMs: 0, operations: [] } }),
+      ev("TEXT_BLOCK_DELTA", { replyId: "final", delta: "## 核心结论\n真实数据报告。" }),
+      ev("AGENT_END"),
+      ev("RUN_END", { run: { runId: videoRunId, status: "SUCCEEDED", durationMs: 1000, operations: [] } }),
+    ]));
+  });
+  videoHook.URL.createObjectURL = () => "blob:video-test";
+  videoHook.URL.revokeObjectURL = () => {};
+  await videoHook.send("分析收入");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const videoOffer = videoHook.document.querySelector(".report-video-offer");
+  assert.equal(videoOffer.hidden, false);
+  assert.match(videoOffer.textContent, /把这份分析做成短视频/);
+  assert.equal(videoRenderCalls, 0);
+  videoOffer.querySelector("button").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(videoRenderCalls, 1);
+  assert.ok(videoOffer.querySelector("video[controls]"));
+  videoHook.close();
+  console.log("PASS report video hook offers once and renders only after acceptance");
   const successfulTools = await setup((options) => {
     const body = JSON.parse(options.body);
     return streamed(events([
@@ -203,11 +293,72 @@ function controlledStream() {
   fileInput.dispatchEvent(new fileUpload.Event("change"));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.match(fileUpload.document.querySelector("#file-status").textContent, /2 行/);
+  assert.equal(fileUpload.document.querySelector("#status").closest("#composer"), null);
+  assert.equal(fileUpload.document.querySelector("#send").parentElement.className, "composer-controls");
+  assert.equal(fileUpload.document.querySelector("#send").closest(".composer-tools"), null);
   await fileUpload.send("汇总文件");
   assert.match(attachmentRequest.query, /fileId=test-file/);
   assert.equal(fileUpload.document.querySelector("#file-status").textContent, "");
   fileUpload.close();
   console.log("PASS CSV attachment upload, preview metadata and scoped analysis request");
+  let excelPayload;
+  const dashboard = await setup((options, url) => {
+    if (url === "/api/history") return { ok: true, json: async () => ({ revision: 0, data: null }) };
+    if (url === "/api/data-center") return { ok: true, json: async () => ({ tables: [{ name: "sales_order", description: "Order facts", columns: [{ name: "total_amount" }] }] }) };
+    if (url.startsWith("/api/files?")) return { ok: true, json: async () => [] };
+    if (url === "/api/files") {
+      excelPayload = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ fileId: "excel-1", name: excelPayload.name, totalRows: 1, columns: ["amount"] }) };
+    }
+    throw new Error("Unexpected URL " + url);
+  }, {}, { workspaceEnabled: true });
+  dashboard.document.querySelector("#open-data-center").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(dashboard.document.querySelector("#data-center-content").textContent, /sales_order/);
+  assert.match(dashboard.document.querySelector("#data-center-detail").textContent, /total_amount/);
+  dashboard.document.querySelector("#data-center-search").value = "missing";
+  dashboard.document.querySelector("#data-center-search").dispatchEvent(new dashboard.Event("input"));
+  assert.match(dashboard.document.querySelector("#data-center-content").textContent, /没有匹配结果/);
+  dashboard.document.querySelector("#data-center-search").value = "";
+  dashboard.document.querySelector("#data-center-search").dispatchEvent(new dashboard.Event("input"));
+  assert.equal(dashboard.document.querySelector(".composer-dock").hidden, true);
+  dashboard.document.querySelector("#open-settings").click();
+  dashboard.document.querySelector('[data-settings-tab="memory"]').click();
+  assert.match(dashboard.document.querySelector('[data-settings-panel="memory"]').textContent, /待办/);
+  dashboard.document.querySelector("#close-settings").click();
+  dashboard.document.querySelector("#data-tab-files").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(dashboard.document.querySelector("#data-center-detail").textContent, /当前会话还没有文件/);
+  dashboard.document.querySelector("#new-chat").click();
+  assert.equal(dashboard.document.querySelector(".composer-dock").hidden, false);
+  const excelInput = dashboard.document.querySelector("#file-upload");
+  Object.defineProperty(excelInput, "files", { value: [{ name: "report.xlsx", size: 4, arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer }] });
+  excelInput.dispatchEvent(new dashboard.Event("change"));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(excelPayload.base64, "AQIDBA==");
+  assert.equal(excelPayload.content, undefined);
+  assert.match(dashboard.document.querySelector("#file-status").textContent, /report.xlsx/);
+  dashboard.document.querySelector("#remove-file").click();
+  assert.equal(dashboard.document.querySelector("#file-status").textContent, "");
+  const more = dashboard.document.querySelector("#more-input-options");
+  const mode = dashboard.document.querySelector("#analysis-mode-trigger");
+  more.click();
+  assert.equal(more.getAttribute("aria-expanded"), "true");
+  mode.click();
+  assert.equal(dashboard.document.querySelector("#composer-options-menu").hidden, true);
+  assert.equal(mode.getAttribute("aria-expanded"), "true");
+  dashboard.document.querySelector('[data-mode="FAST"]').click();
+  assert.equal(dashboard.document.querySelector("#analysis-mode").value, "FAST");
+  assert.equal(dashboard.document.querySelector("#analysis-mode-label").textContent, "快速执行");
+  assert.equal(dashboard.document.querySelector("#analysis-mode-menu").hidden, true);
+  mode.click();
+  dashboard.document.body.click();
+  assert.equal(dashboard.document.querySelector("#analysis-mode-menu").hidden, true);
+  more.click();
+  dashboard.document.dispatchEvent(new dashboard.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(dashboard.document.querySelector("#composer-options-menu").hidden, true);
+  dashboard.close();
+  console.log("PASS data center, memory placeholder and Excel attachment path");
   let serverHistory = { revision: 2, data: { chats: [{ id: "server-chat", runtimeId: "server-session", title: "服务端对话", updatedAt: 1,
     turns: [{ query: "old", text: "服务端保存的回答", status: "分析完成", steps: [], evidence: [] }] }], activeId: "server-chat" } };
   let savedRequests = 0;
@@ -231,6 +382,14 @@ function controlledStream() {
   assert.equal(serverHistory.data.chats[0].turns[1].text, "继续的回答");
   persistent.close();
   console.log("PASS server history restore, serialized versioned saves and stable conversation id");
+  const legacyPartial = { chats: [{ id: "legacy", runtimeId: "legacy-session", title: "旧记录", updatedAt: 1,
+    turns: [{ query: "old", text: "报告已生成", status: "分析结束，部分工具未成功",
+      execution: { version: 1, runId: "legacy-run", conversationId: "legacy-session", revision: 1,
+        tools: [], todos: [], status: "PARTIAL", progress: "分析结束，部分工具未成功",
+        finalNarrationId: "final", text: "" } }] }], activeId: "legacy" };
+  const legacy = await setup(() => streamed(events([])), { "qiqi.conversations.v1.admin": JSON.stringify(legacyPartial) });
+  assert.match(legacy.document.querySelector(".response-status").textContent, /结果已生成 · 可查看失败记录/);
+  legacy.close();
   const sampleRun = { runId: "12345678-1234-1234-1234-123456789abc", status: "PARTIAL", durationMs: 2100,
     usage: { inputTokens: 42, outputTokens: 8, cachedTokens: 3 },
     operations: [{ id: "search", kind: "tool", name: "web_search", status: "FAILED", durationMs: 120, errorCode: "WEB_TIMEOUT" }] };
@@ -258,7 +417,7 @@ function controlledStream() {
   research.close();
   const restoredResearch = await setup(() => streamed(events([])), { "qiqi.conversations.v1.admin": researchHistory });
   assert.equal(restoredResearch.document.querySelectorAll(".web-sources a").length, 1);
-  assert.match(restoredResearch.document.querySelector(".run-diagnostics").textContent, /含工具失败/);
+  assert.match(restoredResearch.document.querySelector(".run-diagnostics").textContent, /有失败记录/);
   assert.equal(restoredResearch.document.querySelector("#online-search").disabled, true);
   restoredResearch.close();
   const exhausted = await setup(() => streamed(events([ev("AGENT_END"), ev("RUN_END", { run: { ...sampleRun, status: "INCOMPLETE", errorCode: "MAX_ITERATIONS" } })])));
@@ -324,6 +483,85 @@ function controlledStream() {
   assert.equal(outage.document.querySelectorAll(".chart-card").length, 0);
   outage.close();
   console.log("PASS chart artifacts, duplicate events, history replay, image failures, unsafe sources and MCP outage fallback");
+  const visual = await setup(() => { throw new Error("No model call expected"); });
+  const visualResponse = visual.visualTest.createResponse("可视化测试");
+  visualResponse.resultConclusionBody.textContent = "真实查询结果";
+  visual.visualTest.addEvidence(visualResponse, JSON.stringify({
+    queryId: "query-visual", columns: ["部门", "收入"], rowCount: 30,
+    durationMs: 8, executedSql: "SELECT department, revenue FROM sales",
+  }));
+  assert.equal(visual.document.querySelectorAll(".data-view-card").length, 0);
+  visual.visualTest.addEvidence(visualResponse, JSON.stringify({
+    queryId: "query-visual", columns: ["部门", "收入"], rows: [
+      { "部门": "华东", "收入": 12 }, { "部门": "华南", "收入": 28 },
+      { "部门": "<img src=x onerror=alert(1)>", "收入": 9 },
+    ], rowCount: 30, truncated: true, durationMs: 8, executedSql: "SELECT department, revenue FROM sales",
+  }));
+  const visualDoc = visual.document;
+  assert.equal(visualDoc.querySelectorAll(".data-view-card").length, 1);
+  assert.match(visualDoc.querySelector(".data-view-warning").textContent, /预览数据/);
+  assert.equal(visualDoc.querySelectorAll(".data-view-tabs button").length, 5);
+  assert.equal(visualDoc.querySelectorAll(".data-view-actions .data-export-button").length, 0);
+  visualDoc.querySelectorAll(".data-view-tabs button")[2].click();
+  assert.equal(visualDoc.querySelectorAll(".data-bar-row").length, 3);
+  visualDoc.querySelectorAll(".data-view-tabs button")[3].click();
+  assert.equal(visualDoc.querySelectorAll(".data-view-stage svg circle").length, 3);
+  visualDoc.querySelectorAll(".data-view-tabs button")[4].click();
+  assert.ok(visualDoc.querySelector(".data-donut"));
+  visualDoc.querySelectorAll(".data-view-tabs button")[1].click();
+  assert.equal(visualDoc.querySelectorAll(".data-table tbody tr").length, 3);
+  assert.equal(visualDoc.querySelector(".data-view-card img"), null);
+  const htmlReport = await visual.visualTest.portableHtmlReport(visualResponse);
+  assert.match(htmlReport, /Content-Security-Policy/);
+  assert.match(htmlReport, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(htmlReport, /<script|<img src=x onerror=/);
+  assert.doesNotMatch(htmlReport, /data-view-tabs/);
+  assert.match(htmlReport, /class="export-view-mode"/);
+  assert.match(htmlReport, /<summary>表格<\/summary>/);
+  assert.match(htmlReport, /<summary>环形图<\/summary>/);
+  assert.match(htmlReport, /仅展示前 3 行/);
+  visualDoc.querySelector(".report-actions button:last-child").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(visualDoc.querySelector("#report-preview-dialog").open, true);
+  assert.match(visualDoc.querySelector("#report-preview-frame").srcdoc, /<summary>柱状图<\/summary>/);
+  visualDoc.querySelector("#close-report-preview").click();
+  assert.equal(visualDoc.querySelector("#report-preview-dialog").open, false);
+  visual.close();
+  const stable = await setup(() => { throw new Error("No model call expected"); });
+  const stableResponse = stable.visualTest.createResponse("滚动回归");
+  stableResponse.agentEnded = true;
+  const firstPart = "## 核心结论\n已核对收入。\n\n## 详细分析\n第一段保持稳定。";
+  stable.visualTest.paintResponse(stableResponse, firstPart);
+  const stableHeading = stable.document.querySelector(".result-conclusion-body h2");
+  const stableParagraph = stable.document.querySelector(".report-body p");
+  const scroller = stable.document.querySelector("#scroll-area");
+  scroller.scrollTop = 180;
+  scroller.dispatchEvent(new stable.WheelEvent("wheel", { deltaY: -30, bubbles: true }));
+  assert.equal(stable.visualTest.state.pinned, false);
+  stable.visualTest.paintResponse(stableResponse, `${firstPart}\n\n第二段正在输出。`);
+  assert.equal(stable.document.querySelector(".result-conclusion-body h2"), stableHeading);
+  assert.equal(stable.document.querySelector(".report-body p"), stableParagraph);
+  assert.equal(scroller.scrollTop, 180);
+  stable.close();
+  let evidencePath;
+  const recoveredVisual = await setup((options, url) => {
+    if (url === "/api/history") return { ok: true, json: async () => ({ revision: 0, data: null }) };
+    evidencePath = url;
+    return { ok: true, json: async () => ({ queryId: "restored-query", columns: ["地区", "订单"],
+      rows: [{ "地区": "北区", "订单": 4 }, { "地区": "南区", "订单": 6 }], rowCount: 2 }) };
+  }, {}, { workspaceEnabled: true });
+  const recoveredResponse = recoveredVisual.visualTest.createResponse("历史报告");
+  recoveredVisual.visualTest.addEvidence(recoveredResponse, JSON.stringify({
+    queryId: "restored-query", columns: ["地区", "订单"], rowCount: 2, durationMs: 5,
+    executedSql: "SELECT region, count(*) FROM orders GROUP BY region",
+  }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(evidencePath, /\/api\/evidence\/restored-query\?conversationId=/);
+  assert.equal(recoveredVisual.document.querySelectorAll(".data-view-card").length, 1);
+  assert.equal(recoveredVisual.document.querySelectorAll(".data-view-actions .data-export-button").length, 1);
+  assert.equal(recoveredVisual.document.querySelectorAll(".evidence-item > button").length, 0);
+  recoveredVisual.close();
+  console.log("PASS query-backed visual formats, preview limits, safe table values and HTML report");
   const typingText = "逐字呈现中文与 emoji 🌿，保持完整。".repeat(10);
   const typing = await setup(() =>
     streamed(
@@ -395,6 +633,7 @@ function controlledStream() {
       maxRows: "200",
       timeoutSeconds: "10",
     },
+    creative: { hyperframesEnabled: false },
   };
   let savedSettings;
   const configWindow = await setup((options) => {
@@ -424,6 +663,19 @@ function controlledStream() {
   );
   cd.querySelector('[data-settings-tab="database"]').click();
   assert.equal(cd.querySelector("#database-max-rows").value, "200");
+  cd.querySelector('[data-settings-tab="creative"]').click();
+  assert.equal(cd.querySelector("#hyperframes-enabled").checked, false);
+  const settingsStyle = cd.createElement("style");
+  settingsStyle.textContent = readFileSync(root + "styles.css", "utf8");
+  cd.head.append(settingsStyle);
+  assert.equal(configWindow.getComputedStyle(cd.querySelector("#hyperframes-enabled")).width, "40px");
+  assert.equal(configWindow.getComputedStyle(cd.querySelector("#hyperframes-enabled")).height, "24px");
+  cd.querySelector("#hyperframes-enabled").click();
+  cd.querySelector("#creative-settings-form").dispatchEvent(
+    new configWindow.Event("submit", { cancelable: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(savedSettings.hyperframesEnabled, true);
   cd.querySelector("#close-settings").click();
   assert.equal(cd.querySelector(".sidebar").inert, false);
   configWindow.close();
@@ -474,6 +726,7 @@ function controlledStream() {
     0,
   );
   assert.equal(d.querySelectorAll("#send").length, 1);
+  assert.equal(calls[0].analysisMode, "AUTO");
   assert.equal(d.querySelectorAll(".evidence-item").length, 1);
   assert.equal(d.querySelector("#stop").hidden, true);
   assert.match(d.querySelector("#status").textContent, /分析完成/);
@@ -481,7 +734,10 @@ function controlledStream() {
   d.querySelector("#user").value = "alice";
   d.querySelector("#user").dispatchEvent(new w.Event("change"));
   assert.equal(d.querySelector("#messages").children.length, 0);
+  d.querySelector("#analysis-mode").value = "FAST";
   await w.send("另一个身份");
+  assert.equal(calls[1].analysisMode, "FAST");
+  assert.equal(d.querySelector("#analysis-mode").value, "AUTO");
   assert.notEqual(calls[1].conversationId, oldId);
   const adminSaved = w.localStorage.getItem("qiqi.conversations.v1.admin");
   const restoredCalls = [];
