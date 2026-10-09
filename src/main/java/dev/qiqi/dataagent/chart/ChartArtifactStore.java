@@ -10,7 +10,7 @@ public class ChartArtifactStore {
     public ChartArtifact save(String owner, ChartArtifact artifact) {
         workspace.write(owner, "charts", artifact.id(), artifact);
         return artifact.source().startsWith("data:image/png;base64,")
-                ? new ChartArtifact(artifact.id(), artifact.queryId(), artifact.title(), artifact.type(), "/api/charts/" + artifact.id()) : artifact;
+                ? new ChartArtifact(artifact.id(), artifact.queryId(), artifact.title(), artifact.type(), "/api/charts/" + artifact.id(), artifact.option()) : artifact;
     }
     public ChartArtifact require(String owner, String id) {
         return workspace.read(owner, "charts", id, ChartArtifact.class)

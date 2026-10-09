@@ -47,10 +47,10 @@ async function setup(handler, stored = {}, meta = {}) {
           }),
         }
       : handler(options, url);
-  for (const f of ["vendor/marked.umd.js", "vendor/purify.min.js", "app.js"])
+  for (const f of ["vendor/marked.umd.js", "vendor/purify.min.js", "chart-view.js", "app.js"])
     w.eval(
       readFileSync(root + f, "utf8") +
-        (f === "app.js" ? "\nwindow.send = send; window.visualTest = { createResponse, addEvidence, portableHtmlReport, paintResponse, state };" : ""),
+        (f === "app.js" ? "\nwindow.send = send; window.visualTest = { createResponse, addEvidence, addChart, portableHtmlReport, paintResponse, state };" : ""),
     );
   await new Promise((r) => setTimeout(r, 10));
   return w;
@@ -439,6 +439,7 @@ function controlledStream() {
   }));
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(staged.document.querySelectorAll(".chart-card").length, 0);
+  assert.equal(staged.document.querySelector(".composer-dock").closest("#welcome"), null);
   controlled.emit(ev("TEXT_BLOCK_DELTA", { replyId: "final", delta: "分析完成。" }));
   controlled.emit(ev("AGENT_END"));
   controlled.close();
@@ -451,6 +452,20 @@ function controlledStream() {
     ev("TOOL_RESULT_END", { toolCallId: "chart-call", toolCallName: "generate_chart", state: "success", metadata: { chart } }),
     ev("TEXT_BLOCK_DELTA", { replyId: "chart", delta: "已生成图表。" }), ev("AGENT_END"),
   ];
+  const interactiveEvents = chartEvents.map((event, index) => index > 1 && event.data?.metadata?.chart
+    ? { ...event, data: { ...event.data, metadata: { chart: { ...chart, option: { series: [{ type: "bar", data: [120] }], tooltip: { renderMode: "html" } } } } } }
+    : event);
+  const interactive = await setup(() => streamed(events(interactiveEvents)));
+  let renderedOption;
+  interactive.structuredClone = structuredClone;
+  interactive.ResizeObserver = class { observe() {} disconnect() {} };
+  interactive.echarts = { init: () => ({ setOption(option) { renderedOption = option; }, resize() {}, dispose() {} }) };
+  await interactive.send("交互图表");
+  assert.equal(interactive.document.querySelectorAll(".chart-interactive").length, 1);
+  assert.equal(interactive.document.querySelector(".chart-image").hidden, true);
+  assert.equal(renderedOption.tooltip.renderMode, "richText");
+  assert.ok(interactive.localStorage.getItem("qiqi.conversations.v1.admin").includes('"option"'));
+  interactive.close();
   const charts = await setup(() => streamed(events(chartEvents)));
   await charts.send("画收入图");
   assert.equal(charts.document.querySelectorAll(".chart-card").length, 1);
@@ -500,14 +515,15 @@ function controlledStream() {
   const visualDoc = visual.document;
   assert.equal(visualDoc.querySelectorAll(".data-view-card").length, 1);
   assert.match(visualDoc.querySelector(".data-view-warning").textContent, /预览数据/);
-  assert.equal(visualDoc.querySelectorAll(".data-view-tabs button").length, 5);
+  assert.equal(visualDoc.querySelectorAll(".data-view-tabs button").length, 3);
   assert.equal(visualDoc.querySelectorAll(".data-view-actions .data-export-button").length, 0);
+  let explorationOption;
+  visual.ResizeObserver = class { observe() {} disconnect() {} };
+  visual.echarts = { init: () => ({ setOption(option) { explorationOption = option; }, resize() {}, dispose() {} }) };
   visualDoc.querySelectorAll(".data-view-tabs button")[2].click();
-  assert.equal(visualDoc.querySelectorAll(".data-bar-row").length, 3);
-  visualDoc.querySelectorAll(".data-view-tabs button")[3].click();
-  assert.equal(visualDoc.querySelectorAll(".data-view-stage svg circle").length, 3);
-  visualDoc.querySelectorAll(".data-view-tabs button")[4].click();
-  assert.ok(visualDoc.querySelector(".data-donut"));
+  assert.equal(visualDoc.querySelectorAll(".chart-interactive").length, 1);
+  assert.deepEqual(Array.from(explorationOption.series[0].data), [12, 28, 9]);
+  assert.equal(visualDoc.querySelectorAll(".chart-explorer-fields select").length, 6);
   visualDoc.querySelectorAll(".data-view-tabs button")[1].click();
   assert.equal(visualDoc.querySelectorAll(".data-table tbody tr").length, 3);
   assert.equal(visualDoc.querySelector(".data-view-card img"), null);
@@ -518,12 +534,12 @@ function controlledStream() {
   assert.doesNotMatch(htmlReport, /data-view-tabs/);
   assert.match(htmlReport, /class="export-view-mode"/);
   assert.match(htmlReport, /<summary>表格<\/summary>/);
-  assert.match(htmlReport, /<summary>环形图<\/summary>/);
+  assert.doesNotMatch(htmlReport, /chart-explorer|data-analysis-chart/);
   assert.match(htmlReport, /仅展示前 3 行/);
   visualDoc.querySelector(".report-actions button:last-child").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(visualDoc.querySelector("#report-preview-dialog").open, true);
-  assert.match(visualDoc.querySelector("#report-preview-frame").srcdoc, /<summary>柱状图<\/summary>/);
+  assert.match(visualDoc.querySelector("#report-preview-frame").srcdoc, /<summary>表格<\/summary>/);
   visualDoc.querySelector("#close-report-preview").click();
   assert.equal(visualDoc.querySelector("#report-preview-dialog").open, false);
   visual.close();
@@ -561,6 +577,35 @@ function controlledStream() {
   assert.equal(recoveredVisual.document.querySelectorAll(".data-view-actions .data-export-button").length, 1);
   assert.equal(recoveredVisual.document.querySelectorAll(".evidence-item > button").length, 0);
   recoveredVisual.close();
+  const unified = await setup(() => { throw new Error("No model call expected"); });
+  unified.ResizeObserver = class { observe() {} disconnect() {} };
+  unified.echarts = { init: () => ({ setOption() {}, resize() {}, dispose() {} }) };
+  const queryRows = [{ period: "Jan", team: "A", revenue: 10 }, { period: "Feb", team: "A", revenue: 20 }, { period: "Feb", team: "B", revenue: 5 }];
+  const config = { category: "period", metric: "revenue", series: "team", type: "line", aggregate: "none", sort: "original" };
+  const options = unified.NomanCharts.compile(config, ["period", "team", "revenue"], queryRows);
+  assert.equal(JSON.stringify(options.series[1].data), "[null,5]");
+  assert.throws(() => unified.NomanCharts.compile({ ...config, series: "" }, ["period", "team", "revenue"], queryRows), /组合重复/);
+  const aggregated = unified.NomanCharts.compile({ ...config, series: "", aggregate: "sum" }, ["period", "team", "revenue"], queryRows);
+  assert.equal(JSON.stringify(aggregated.series[0].data), "[10,25]");
+  assert.throws(() => unified.NomanCharts.compile(config, ["period", "team", "revenue"], [{ period: "Jan", team: "A", revenue: null }]), /空值/);
+  for (const chartFirst of [true, false]) {
+    const response = unified.visualTest.createResponse("统一卡片");
+    response.agentEnded = true; response.savedTurn = {};
+    const artifact = { id: "unified-" + chartFirst, queryId: "unified-" + chartFirst, title: "部门趋势", type: "line", source: "https://storage.example/chart.png", option: options };
+    const evidence = { queryId: artifact.queryId, columns: ["period", "team", "revenue"], rows: queryRows, rowCount: 3 };
+    if (chartFirst) unified.visualTest.addChart(response, artifact);
+    unified.visualTest.addEvidence(response, JSON.stringify(evidence));
+    unified.visualTest.addChart(response, artifact);
+    assert.equal(response.card.querySelectorAll(".data-view-card .chart-card").length, 1);
+    assert.equal(response.card.querySelectorAll(".chart-results .chart-card").length, 0);
+    const source = response.card.querySelector('[aria-label="图表来源"]');
+    source.value = "explore"; source.dispatchEvent(new unified.Event("change"));
+    const aggregation = response.card.querySelector('[aria-label="聚合"]');
+    aggregation.value = "sum"; aggregation.dispatchEvent(new unified.Event("change"));
+    assert.equal(response.savedTurn.visualConfigs[artifact.queryId].aggregate, "sum");
+  }
+  unified.close();
+  console.log("PASS unified query cards in both event orders, series gaps, explicit aggregation and saved exploration config");
   console.log("PASS query-backed visual formats, preview limits, safe table values and HTML report");
   const typingText = "逐字呈现中文与 emoji 🌿，保持完整。".repeat(10);
   const typing = await setup(() =>

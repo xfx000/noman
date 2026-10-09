@@ -2802,26 +2802,6 @@ input:focus-visible {
 .data-table th, .data-table td { padding: 9px 13px; text-align: left; border-bottom: 1px solid #eff0f4; max-width: 260px; overflow-wrap: anywhere; }
 .data-table th { position: sticky; top: 0; background: #f7f8fb; color: #6f7889; font-weight: 600; }
 .data-table tr:last-child td { border-bottom: 0; }
-.data-bars { display: grid; gap: 12px; }
-.data-bar-row { display: grid; grid-template-columns: minmax(90px, 140px) minmax(80px, 1fr) 80px; gap: 10px; align-items: center; font-size: 12px; }
-.data-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555f74; }
-.data-bar-track { position: relative; height: 16px; border-radius: 20px; background: #f0f2f8; }
-.data-bar-track.signed::after { content: ""; position: absolute; left: 50%; top: -3px; height: 22px; border-left: 1px solid #8c93a5; }
-.data-bar-fill { height: 100%; border-radius: 20px; background: linear-gradient(90deg, #a9b6ef, #6479d8); }
-.data-bar-track.signed .data-bar-fill { position: absolute; left: 50%; }
-.data-bar-track.signed .data-bar-fill.negative { left: auto; right: 50%; }
-.data-bar-fill.negative { background: #d79684; }
-.data-bar-value { text-align: right; color: #36456b; }
-.data-view-stage svg { display: block; width: 100%; max-height: 270px; background: linear-gradient(#fff, #f8f9fe); border-radius: 12px; }
-.data-line-labels { display: flex; justify-content: space-between; color: #788195; font-size: 11px; }
-.data-donut-layout { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 30px; }
-.data-donut { width: 190px; height: 190px; flex: none; display: grid; place-items: center; border-radius: 50%; }
-.data-donut-center { width: 112px; height: 112px; display: grid; place-items: center; border-radius: 50%; background: #fff; color: #343e69; font-size: 19px; font-weight: 700; }
-.data-donut-legend { min-width: 180px; max-width: 320px; flex: 1; display: grid; gap: 9px; }
-.data-donut-legend > div { display: flex; gap: 9px; align-items: center; min-width: 0; font-size: 12px; }
-.data-donut-legend i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.data-donut-legend span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.data-donut-legend strong { margin-left: auto; white-space: nowrap; }
 .data-view-note { margin: 13px 0 0; color: #858da0; font-size: 11px; }
 .data-view-actions { display: flex; justify-content: flex-end; margin-top: 16px; padding-top: 14px; border-top: 1px solid #edf0f5; }
 .data-export-button { border: 1px solid #dce3f5; border-radius: 9px; background: #f7f9ff; color: #45578f; padding: 8px 13px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
@@ -2963,3 +2943,24 @@ input:focus-visible {
   .composer-tools { gap: 5px; }
   .composer-meta .keyboard-hint { display: none; }
 }
+
+/* Interactive charts share the report's restrained visual language. */
+.chart-interactive { width: 100%; height: 380px; background: #fff; }
+.chart-card { box-shadow: 0 8px 28px rgba(31, 51, 43, .04); }
+.chart-caption { border-bottom: 1px solid var(--border, #e5e9e5); }
+@media (max-width: 600px) { .chart-interactive { height: 320px; } }
+
+@media (min-width: 601px) { .suggestions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* One query card, one visual language for authored and exploratory charts. */
+.data-analysis-chart[hidden], .chart-explorer[hidden], .chart-explorer-fields[hidden], .data-view-stage[hidden] { display: none; }
+.data-analysis-chart .chart-card { border: 0; border-radius: 0; box-shadow: none; }
+.data-analysis-chart .chart-caption { padding: 12px 0; font-size: 13px; }
+.data-analysis-chart .chart-evidence { display: none; }
+.data-analysis-chart .chart-card[hidden] { display: none; }
+.chart-explorer { padding: 14px 0; border-bottom: 1px solid var(--line, #e5e8ef); }
+.chart-explorer select { max-width: 100%; padding: 8px 10px; border: 1px solid var(--line, #e5e8ef); border-radius: 8px; background: var(--surface, #fff); color: inherit; font: inherit; font-size: 12px; }
+.chart-explorer > select { width: 100%; }
+.chart-explorer-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.chart-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted, #626879); }
+@media (max-width: 600px) { .chart-explorer-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -4,10 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Qiqi DataAgent · 数据分析工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=report-video-1" />
+    <link rel="stylesheet" href="/styles.css?v=charts-unified-3" />
     <script defer src="/vendor/marked.umd.js"></script>
     <script defer src="/vendor/purify.min.js"></script>
-    <script defer src="/app.js?v=report-video-1"></script>
+    <script defer src="/vendor/echarts.min.js"></script>
+    <script defer src="/chart-view.js?v=unified-2"></script>
+    <script defer src="/app.js?v=charts-unified-3"></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -96,6 +98,9 @@
                 ><strong>探索业务数据</strong
                 ><span>了解可查询的数据与表结构</span
                 ><span class="suggestion-arrow">↗</span>
+              </button>
+              <button class="suggestion" data-prompt="请分析 2026 年 1 月与 2 月各部门的已付款订单收入，先核对订单状态与字段口径，按月份和部门汇总；用 line 图并指定 seriesColumn 生成部门多系列收入趋势，再汇总各部门总收入，按金额升序用 horizontal_bar 生成收入排名图。请解读主要变化，附上真实 SQL 和 queryId；缺失数据不要补零。H2 月份别名请使用 period_label，避免保留字 month。">
+                <span class="suggestion-icon" aria-hidden="true">▤</span><strong>图表分析体验</strong><span>部门收入趋势与排名，试试交互图表</span><span class="suggestion-arrow">↗</span>
               </button>
             </div>
             <div class="dataset-note">

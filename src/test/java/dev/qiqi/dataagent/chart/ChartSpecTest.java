@@ -43,4 +43,21 @@ class ChartSpecTest {
                 List.of(Map.of("month", "Jan", "revenue", value))))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> spec("bar").option(result("q1", false, List.of()))).hasMessageContaining("1–100");
     }
+    @Test void multiSeriesPreservesMissingPointsAndRejectsDuplicatePairs() {
+        var rows = List.<Map<String, Object>>of(
+                Map.of("month", "Jan", "department", "A", "revenue", 120),
+                Map.of("month", "Feb", "department", "A", "revenue", 160),
+                Map.of("month", "Feb", "department", "B", "revenue", 80));
+        var query = new QueryResult("q1", List.of("month", "department", "revenue"), rows, 3, false, 1, "SELECT …");
+        var chart = new ChartSpec("q1", "line", "month", "revenue", "趋势", "department");
+        var series = (List<?>) chart.option(query).get("series");
+        assertThat(((Map<?, ?>) series.get(1)).get("data")).isEqualTo(java.util.Arrays.asList(null, 80));
+        var duplicate = new QueryResult("q1", query.columns(), List.of(rows.getFirst(), rows.getFirst()), 2, false, 1, "SELECT …");
+        assertThatThrownBy(() -> chart.option(duplicate)).hasMessageContaining("重复");
+    }
+    @Test void horizontalRankingUsesNumericXAxisAndOriginalValues() {
+        var option = spec("horizontal_bar").option(sample());
+        assertThat(((Map<?, ?>) option.get("xAxis")).get("type")).isEqualTo("value");
+        assertThat(((Map<?, ?>) ((List<?>) option.get("series")).getFirst()).get("data")).isEqualTo(List.of(120, 160));
+    }
 }

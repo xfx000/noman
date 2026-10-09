@@ -781,7 +781,7 @@ function openConversation(id) {
       }
       response.executionDetails.hidden = false;
     }
-    if (state.executionEnabled && turn.diagnostics?.runId && (turn.recoverExecution || turn.diagnostics.status === "RUNNING"))
+    if (state.executionEnabled && turn.diagnostics?.runId && (turn.recoverExecution || turn.diagnostics.status === "RUNNING" || (turn.charts || []).some(chart => !chart.option)))
       recoverExecution(response);
 
     response.actions.hidden = !response.text;
@@ -1259,15 +1259,13 @@ function renderDataView(response, result) {
   const columns = Array.isArray(result.columns) ? result.columns.filter(name => typeof name === "string").slice(0, 30) : [];
   const rows = Array.isArray(result.rows) ? result.rows.filter(row => row && typeof row === "object" && !Array.isArray(row)).slice(0, 200) : [];
   if (!columns.length || !rows.length) return false;
-  const numeric = columns.filter(column => rows.some(row => numericValue(row[column]) !== null));
-  const category = columns.find(column => !numeric.includes(column)) || columns[0];
-  const metric = numeric.find(column => column !== category);
-  const points = metric ? rows.slice(0, 12).map((row, index) => ({
-    label: String(row[category] ?? `第 ${index + 1} 行`).slice(0, 80), value: numericValue(row[metric]),
-  })).filter(point => point.value !== null) : [];
-  const modes = ["概览", "表格"];
-  if (points.length >= 2) modes.push("柱状图", "折线图");
-  if (points.length >= 2 && points.every(point => point.value >= 0) && points.some(point => point.value > 0)) modes.push("环形图");
+  const roles = NomanCharts.fields(columns, rows);
+  const numeric = roles.filter(field => field.role === "measure").map(field => field.name);
+  const inferred = NomanCharts.infer(columns, rows);
+  let config = { ...inferred, ...(response.savedTurn?.visualConfigs?.[result.queryId] || {}) };
+  const modes = ["概览", "表格", ...(numeric.length ? ["图表"] : [])];
+  let metric = config.metric;
+  const points = metric ? rows.map(row => ({ label: String(row[config.category] ?? "—"), value: numericValue(row[metric]) })).filter(point => point.value !== null) : [];
   const card = element("details", "data-view-card");
   card.dataset.queryId = result.queryId;
   card.open = !response.dataViews.children.length;
@@ -1281,7 +1279,62 @@ function renderDataView(response, result) {
   const tabs = element("div", "data-view-tabs");
   tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "数据展示形式");
   const stage = element("div", "data-view-stage");
+  const chartHost = element("div", "data-analysis-chart");
+  chartHost.hidden = true;
+  const controls = element("div", "chart-explorer");
+  const chartPicker = element("select");
+  chartPicker.setAttribute("aria-label", "图表来源");
+  const exploreChoice = element("option", "", "自主探索"); exploreChoice.value = "explore"; chartPicker.append(exploreChoice);
+  const toolbar = element("div", "chart-explorer-fields");
+  let selectedMode = "概览", localPlot, userTouched = false;
+  const selects = {};
+  function saveConfig() {
+    if (response.savedTurn) {
+      response.savedTurn.visualConfigs ||= {};
+      response.savedTurn.visualConfigs[result.queryId] = { ...config };
+      captureResponse(response, true);
+    }
+  }
+  function selectField(key, label, options) {
+    const wrap = element("label", "chart-field"); wrap.append(element("span", "", label));
+    const select = element("select"); select.setAttribute("aria-label", label);
+    for (const [value, text] of options) { const item = element("option", "", text); item.value = value; select.append(item); }
+    select.value = config[key] ?? "";
+    select.addEventListener("change", () => { userTouched = true; config[key] = select.value; metric = config.metric; saveConfig(); paint("图表"); });
+    wrap.append(select); toolbar.append(wrap); selects[key] = select;
+  }
+  selectField("category", "分类", columns.map(name => [name, name]));
+  selectField("metric", "指标", numeric.map(name => [name, name]));
+  selectField("series", "系列", [["", "不分系列"], ...columns.map(name => [name, name])]);
+  selectField("type", "图型", [["bar", "柱状对比"], ["horizontal_bar", "横向排名"], ["line", "趋势折线"], ["pie", "占比环形"]]);
+  selectField("aggregate", "聚合", [["none", "原值"], ["sum", "求和"], ["mean", "平均"], ["count", "计数"]]);
+  selectField("sort", "排序", [["original", "查询顺序"], ["asc", "数值升序"], ["desc", "数值降序"]]);
+  const hint = element("p", "data-view-note", "探索当前查询快照，配置随分析保存；调整不改变原报告与分析图下载。重复分组需明确选择聚合，缺失值不补零。");
+  controls.append(chartPicker, toolbar, hint);
+  controls.hidden = true;
+  chartPicker.addEventListener("change", () => { userTouched = true; paint("图表"); });
+  function attachChart(figure, chart) {
+    if (![...chartPicker.options].some(option => option.value === chart.id)) {
+      const item = element("option", "", chart.title); item.value = chart.id; chartPicker.prepend(item);
+    }
+    figure.hidden = chartPicker.value !== chart.id;
+    chartHost.append(figure);
+    if (!userTouched && (selectedMode === "概览" || chartPicker.value === "explore")) {
+      chartPicker.value = chart.id; card.open = true; paint("图表");
+    }
+  }
   function paint(mode, output = stage) {
+    if (output === stage) {
+      selectedMode = mode;
+      if (localPlot) { localPlot.dispose(); localPlot = null; }
+      controls.hidden = mode !== "图表";
+      const analysis = mode === "图表" && chartPicker.value !== "explore";
+      chartHost.hidden = !analysis;
+      stage.hidden = analysis;
+      toolbar.hidden = analysis;
+      hint.hidden = analysis;
+      for (const figure of chartHost.children) figure.hidden = figure.dataset.chartId !== chartPicker.value;
+    }
     output.replaceChildren();
     if (output === stage) [...tabs.children].forEach(button => {
       button.classList.toggle("active", button.textContent === mode);
@@ -1312,76 +1365,26 @@ function renderDataView(response, result) {
         const tr = element("tr"); columns.forEach(column => tr.append(element("td", "", row[column] == null ? "—" : String(row[column])))); body.append(tr);
       }
       table.append(head, body); wrap.append(table); output.append(wrap);
-    } else if (mode === "柱状图") {
-      const bars = element("div", "data-bars");
-      const max = Math.max(...points.map(point => Math.abs(point.value)), 1);
-      const signed = points.some(point => point.value < 0);
-      for (const point of points) {
-        const row = element("div", "data-bar-row");
-        const track = element("div", "data-bar-track"); const fill = element("div", "data-bar-fill");
-        track.classList.toggle("signed", signed);
-        fill.style.width = `${Math.abs(point.value) / max * (signed ? 50 : 100)}%`;
-        fill.classList.toggle("negative", point.value < 0); track.append(fill);
-        row.append(element("span", "data-bar-label", point.label), track,
-          element("strong", "data-bar-value", compactNumber(point.value))); bars.append(row);
+    } else if (mode === "图表" && output === stage && chartPicker.value === "explore") {
+      const canvas = element("div", "chart-interactive");
+      canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", "查询快照探索图表");
+      output.append(canvas);
+      try {
+        localPlot = NomanCharts.mount(canvas, NomanCharts.compile(config, columns, rows));
+        const download = element("button", "data-export-button", "下载探索图 PNG");
+        download.type = "button";
+        download.addEventListener("click", () => {
+          const link = element("a"); link.href = localPlot.plot.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#fff" });
+          link.download = "Qiqi-查询快照探索.png"; link.click();
+        });
+        output.append(download);
       }
-      output.append(bars);
-    } else if (mode === "折线图") {
-      const values = points.map(point => point.value);
-      const min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
-      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("viewBox", "0 0 640 230"); svg.setAttribute("role", "img");
-      svg.setAttribute("aria-label", `${metric} 按当前结果顺序变化`);
-      const coordinates = points.map((point, index) => ({
-        x: 35 + index * 570 / (points.length - 1), y: 185 - (point.value - min) / spread * 145,
-      }));
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      line.setAttribute("points", coordinates.map(point => `${point.x},${point.y}`).join(" "));
-      line.setAttribute("fill", "none"); line.setAttribute("stroke", "#6578d7");
-      line.setAttribute("stroke-width", "4"); line.setAttribute("stroke-linecap", "round");
-      line.setAttribute("stroke-linejoin", "round"); svg.append(line);
-      coordinates.forEach((point, index) => {
-        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        circle.setAttribute("cx", point.x); circle.setAttribute("cy", point.y);
-        circle.setAttribute("r", "6"); circle.setAttribute("fill", "#6578d7");
-        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-        title.textContent = `${points[index].label}: ${compactNumber(points[index].value)}`;
-        circle.append(title); svg.append(circle);
-      });
-      output.append(svg);
-      const labels = element("div", "data-line-labels");
-      labels.append(element("span", "", points[0].label), element("span", "", points.at(-1).label)); output.append(labels);
-    } else if (mode === "环形图") {
-      const palette = ["#6578d7", "#89a0e8", "#a9b8f0", "#8dcac0", "#b7dcd2", "#d9dcf8"];
-      const featured = points.slice(0, 6), total = points.reduce((sum, point) => sum + point.value, 0);
-      let offset = 0;
-      const slices = featured.map((point, index) => {
-        const start = offset; offset += point.value / total * 100;
-        return `${palette[index]} ${start}% ${offset}%`;
-      });
-      if (offset < 100) slices.push(`#e7eaf5 ${offset}% 100%`);
-      const layout = element("div", "data-donut-layout");
-      const donut = element("div", "data-donut"); donut.style.background = `conic-gradient(${slices.join(",")})`;
-      donut.append(element("div", "data-donut-center", compactNumber(total)));
-      const legend = element("div", "data-donut-legend");
-      featured.forEach((point, index) => {
-        const item = element("div", ""); const swatch = element("i"); swatch.style.background = palette[index];
-        item.append(swatch, element("span", "", point.label), element("strong", "", compactNumber(point.value)));
-        legend.append(item);
-      });
-      if (points.length > featured.length) {
-        const other = element("div", ""); const swatch = element("i"); swatch.style.background = "#e7eaf5";
-        other.append(swatch, element("span", "", `其他 ${points.length - featured.length} 项`),
-          element("strong", "", compactNumber(points.slice(featured.length).reduce((sum, point) => sum + point.value, 0))));
-        legend.append(other);
-      }
-      layout.append(donut, legend); output.append(layout);
+      catch (error) { canvas.remove(); output.append(element("p", "data-view-warning", error.message)); }
     }
-    if (mode !== "表格" && mode !== "概览") output.append(element("p", "data-view-note", `${category} · ${metric} · 按查询返回顺序展示前 ${points.length} 项`));
   }
   for (const mode of modes) {
     const button = element("button", "", mode); button.type = "button";
-    button.addEventListener("click", () => paint(mode)); tabs.append(button);
+    button.addEventListener("click", () => { userTouched = true; paint(mode); }); tabs.append(button);
   }
   const actions = element("div", "data-view-actions");
   if (state.workspaceEnabled && typeof result.queryId === "string") {
@@ -1391,9 +1394,14 @@ function renderDataView(response, result) {
     download.addEventListener("click", () => downloadProtected(`/api/evidence/${encodeURIComponent(result.queryId)}/csv?conversationId=${encodeURIComponent(response.conversationId)}`, response.username, `Qiqi-查询结果-${response.dataViews.children.length + 1}.csv`));
     actions.append(download);
   }
-  inner.append(intro, tabs, stage, actions); card.append(inner); response.dataViews.hidden = false;
-  response.dataViewRenderers.set(result.queryId, { modes, paint });
+  inner.append(intro, tabs, controls, chartHost, stage, actions); card.append(inner); response.dataViews.hidden = false;
+  response.dataViewRenderers.set(result.queryId, { modes: ["概览", "表格"], paint, attachChart });
   response.dataViews.append(card); paint("概览");
+  for (const figure of response.chartArea.querySelectorAll(".chart-card"))
+    if (figure.dataset.queryId === result.queryId) {
+      const chart = response.charts.get(figure.dataset.chartId);
+      if (chart) attachChart(figure, chart);
+    }
   return true;
 }
 function resolveDataView(response, result) {
@@ -1468,8 +1476,19 @@ function chartSource(value) {
 function addChart(response, chart) {
   const source = chartSource(chart?.source);
   if (!source || typeof chart.id !== "string" || typeof chart.queryId !== "string"
-      || typeof chart.title !== "string" || response.charts.has(chart.id)) return;
-  const safe = { id: chart.id, queryId: chart.queryId, title: chart.title, type: chart.type, source };
+      || typeof chart.title !== "string") return;
+  const existing = response.charts.get(chart.id);
+  if (existing) {
+    if (!existing.option && chart.option) {
+      existing.option = chart.option;
+      response.renderedCharts.delete(chart.id);
+      for (const card of response.card.querySelectorAll(".chart-card"))
+        if (card.dataset.chartId === chart.id) card.remove();
+      revealCharts(response);
+    }
+    return;
+  }
+  const safe = { id: chart.id, queryId: chart.queryId, title: chart.title, type: chart.type, source, option: chart.option };
   response.charts.set(safe.id, safe);
   revealCharts(response);
 }
@@ -1478,6 +1497,8 @@ function renderChart(response, safe) {
   response.renderedCharts.add(safe.id);
   const { source } = safe;
   const figure = element("figure", "chart-card");
+  figure.dataset.chartId = safe.id;
+  figure.dataset.queryId = safe.queryId;
   const caption = element("figcaption", "chart-caption");
   caption.append(element("strong", "", safe.title));
   const link = element("a", "chart-download", source.startsWith("data:") ? "下载 PNG" : "打开原图");
@@ -1506,7 +1527,21 @@ function renderChart(response, safe) {
     }).catch(() => { image.hidden = true; failure.hidden = false; });
   } else image.src = source;
   figure.append(caption, image, failure, element("p", "chart-evidence", `查询证据 · ${safe.queryId}`));
-  response.chartArea.append(figure);
+  const renderer = response.dataViewRenderers.get(safe.queryId);
+  if (renderer) renderer.attachChart(figure, safe);
+  else response.chartArea.append(figure);
+  if (safe.option && window.echarts) {
+    const canvas = element("div", "chart-interactive");
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", `${safe.title}，交互图表，查询证据 ${safe.queryId}`);
+    image.before(canvas);
+    try {
+      NomanCharts.mount(canvas, safe.option);
+      image.hidden = true;
+      failure.hidden = true;
+      image.addEventListener("error", () => { failure.hidden = true; });
+    } catch { canvas.remove(); image.hidden = false; }
+  }
 }
 function addChartError(response, message) {
   if (!message || response.chartErrors.has(message)) return;
@@ -1627,6 +1662,8 @@ async function portableHtmlReport(response) {
     card.open = true;
     card.querySelector(".data-view-tabs")?.remove();
     card.querySelector(".data-view-stage")?.remove();
+    card.querySelector(".chart-explorer")?.remove();
+    card.querySelector(".data-analysis-chart")?.remove();
     card.querySelector(".data-view-actions")?.remove();
     const modes = element("div", "export-view-modes");
     for (const mode of renderer.modes) {
@@ -1643,6 +1680,9 @@ async function portableHtmlReport(response) {
   const figures = [];
   for (const chart of response.charts.values()) {
     let source = chart.source;
+    if (chart.option && window.echarts) {
+      try { source = NomanCharts.image(chart.option); } catch { /* Fall back to the saved original PNG. */ }
+    }
     if (source.startsWith("/api/charts/")) {
       const result = await request(source, { headers: { "X-Qiqi-User": response.username } });
       if (!result.ok) throw new Error("Chart unavailable");
@@ -1653,11 +1693,14 @@ async function portableHtmlReport(response) {
         reader.readAsDataURL(blob);
       });
     }
-    figures.push(`<figure><figcaption>${htmlAttribute(chart.title)}</figcaption><img src="${htmlAttribute(source)}" alt="${htmlAttribute(chart.title)}"><small>查询证据：${htmlAttribute(chart.queryId)}</small></figure>`);
+    const markup = `<figure><figcaption>${htmlAttribute(chart.title)}</figcaption><img src="${htmlAttribute(source)}" alt="${htmlAttribute(chart.title)}"><small>查询证据：${htmlAttribute(chart.queryId)}</small></figure>`;
+    const card = [...views.querySelectorAll(".data-view-card")].find(card => card.dataset.queryId === chart.queryId);
+    if (card) card.querySelector(".data-view-inner").insertAdjacentHTML("afterbegin", markup);
+    else figures.push(markup);
   }
   const sources = [...response.webSources.values()].map(source =>
     `<li><a href="${htmlAttribute(source.url)}" rel="noopener noreferrer">${htmlAttribute(source.title)}</a></li>`).join("");
-  const style = `*{box-sizing:border-box}body{margin:0;background:#f6f7fb;color:#26302e;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:42px auto;padding:36px 42px;background:white;border:1px solid #e4e7ef;border-radius:22px;box-shadow:0 18px 60px #2024470c}header{border-bottom:1px solid #e6e9ef;margin-bottom:28px;padding-bottom:20px}header h1{margin:0;font-size:27px}header p,small{color:#777f91}.report-content h1,.report-content h2,.report-content h3{line-height:1.35}.report-content table,.data-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e5e9ef;padding:9px 12px;text-align:left}.table-wrap,.data-table-wrap{overflow:auto}.report-content pre{overflow:auto;background:#f5f6fa;padding:16px;border-radius:10px}figure{margin:28px 0;padding:18px;border:1px solid #e5e8ef;border-radius:16px}figure img{display:block;max-width:100%;margin:14px auto}figure small{display:block}.data-view-card{border:1px solid #e6e9ef;border-radius:16px;margin:20px 0;padding:16px}.data-view-title{font-weight:650}.data-view-intro{display:flex;gap:16px;color:#777f91;font-size:13px}.data-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:18px 0}.data-kpi{background:#f6f7fd;border-radius:12px;padding:14px}.data-kpi span,.data-kpi strong{display:block}.data-kpi span{font-size:12px;color:#777f91}.data-kpi strong{font-size:23px}.data-bars{display:grid;gap:12px;margin:20px 0}.data-bar-row{display:grid;grid-template-columns:130px 1fr 90px;gap:12px;align-items:center}.data-bar-track{position:relative;background:#edf0f9;border-radius:20px;height:17px}.data-bar-track.signed:after{content:"";position:absolute;left:50%;top:-3px;height:23px;border-left:1px solid #8c93a5}.data-bar-fill{background:#6578d7;height:100%;border-radius:20px}.data-bar-track.signed .data-bar-fill{position:absolute;left:50%}.data-bar-track.signed .data-bar-fill.negative{left:auto;right:50%}.data-bar-fill.negative{background:#d99483}.data-view-stage svg{width:100%}.data-line-labels{display:flex;justify-content:space-between}.data-donut-layout{display:flex;align-items:center;gap:28px}.data-donut{width:220px;height:220px;border-radius:50%;display:grid;place-items:center;flex:none}.data-donut-center{width:130px;height:130px;border-radius:50%;background:white;display:grid;place-items:center;font-size:23px;font-weight:700}.data-donut-legend>div{display:flex;gap:10px;align-items:center}.data-donut-legend i{width:10px;height:10px;border-radius:50%}.data-donut-legend strong{margin-left:auto}.data-view-note,.data-view-warning{font-size:12px;color:#777f91}@media(max-width:600px){main{margin:0;padding:20px;border:0;border-radius:0}.data-bar-row{grid-template-columns:80px 1fr 60px}.data-donut-layout{flex-direction:column}}`;
+  const style = `*{box-sizing:border-box}body{margin:0;background:#f6f7fb;color:#26302e;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:42px auto;padding:36px 42px;background:white;border:1px solid #e4e7ef;border-radius:22px;box-shadow:0 18px 60px #2024470c}header{border-bottom:1px solid #e6e9ef;margin-bottom:28px;padding-bottom:20px}header h1{margin:0;font-size:27px}header p,small{color:#777f91}.report-content h1,.report-content h2,.report-content h3{line-height:1.35}.report-content table,.data-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e5e9ef;padding:9px 12px;text-align:left}.table-wrap,.data-table-wrap{overflow:auto}.report-content pre{overflow:auto;background:#f5f6fa;padding:16px;border-radius:10px}figure{margin:28px 0;padding:18px;border:1px solid #e5e8ef;border-radius:16px}figure img{display:block;max-width:100%;margin:14px auto}figure small{display:block}.data-view-card{border:1px solid #e6e9ef;border-radius:16px;margin:20px 0;padding:16px}.data-view-title{font-weight:650}.data-view-intro{display:flex;gap:16px;color:#777f91;font-size:13px}.data-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:18px 0}.data-kpi{background:#f6f7fd;border-radius:12px;padding:14px}.data-kpi span,.data-kpi strong{display:block}.data-kpi span{font-size:12px;color:#777f91}.data-kpi strong{font-size:23px}.data-view-note,.data-view-warning{font-size:12px;color:#777f91}@media(max-width:600px){main{margin:0;padding:20px;border:0;border-radius:0}}`;
   const exportStyle = `.export-view-mode{border-top:1px solid #e9ebf1;padding:12px 0}.export-view-mode summary{cursor:pointer;color:#454f71;font-weight:600}.export-view-mode .data-view-stage{padding:8px 0 12px}.data-view-warning{color:#a06d30}@media print{body{background:white}main{margin:0;max-width:none;padding:0;border:0;box-shadow:none}.export-view-mode{break-inside:avoid}.export-view-mode:not([open]){display:none}}`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:"><title>Qiqi 数据分析报告</title><style>${style}${exportStyle}</style></head><body><main><header><h1>数据分析报告</h1><p>Qiqi · ${htmlAttribute(new Date().toLocaleDateString("zh-CN"))}</p></header><section class="report-content">${response.resultConclusionBody.innerHTML}${figures.join("")}${views.innerHTML}${response.reportBody.innerHTML}</section>${sources ? `<footer><h2>网络来源</h2><ul>${sources}</ul></footer>` : ""}</main></body></html>`;
 }
@@ -2106,7 +2149,7 @@ async function send(query) {
   saveHistory();
   renderHistory();
   refreshControls();
-  $("#welcome").hidden = true;
+  showWorkspacePage(null);
   messages.append(element("article", "message user", query));
   const response = createResponse(query, turn.time, chat.runtimeId);
   response.analysisMode = analysisMode;

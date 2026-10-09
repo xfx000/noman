@@ -34,17 +34,17 @@ public class GenerateChartTool implements AgentTool {
     public boolean enabled() { return properties.enabled(); }
     @Override public String getName() { return "generate_chart"; }
     @Override public String getDescription() {
-        return "Generate a final bar, line or pie chart from a verified execute_sql queryId selected after "
+        return "Generate a final bar, horizontal_bar, line or pie chart from a verified execute_sql queryId selected after "
                 + "the analysis evidence is complete. "
                 + "Never ask the user whether to draw a chart. Select a categoryColumn and numeric valueColumn from the result. "
-                + "Requires 1–100 complete rows and unique categories. Never pass raw data or SQL. "
+                + "Requires 1–100 complete rows and unique categories (or category/series pairs for multi-series lines). Use optional seriesColumn for multi-series line charts; missing points remain gaps. For rankings use horizontal_bar and order rows in SQL. Never pass raw data or SQL. "
                 + "The chart is revealed with the final report; cite queryId in the answer.";
     }
     @Override public Map<String, Object> getParameters() {
         return Map.of("type", "object", "additionalProperties", false,
                 "properties", Map.of("queryId", Map.of("type", "string"),
-                        "type", Map.of("type", "string", "enum", List.of("bar", "line", "pie")),
-                        "categoryColumn", Map.of("type", "string"), "valueColumn", Map.of("type", "string"),
+                        "type", Map.of("type", "string", "enum", List.of("bar", "line", "pie", "horizontal_bar")),
+                        "seriesColumn", Map.of("type", "string"), "categoryColumn", Map.of("type", "string"), "valueColumn", Map.of("type", "string"),
                         "title", Map.of("type", "string", "maxLength", 100)),
                 "required", List.of("queryId", "type", "categoryColumn", "valueColumn"));
     }
@@ -62,7 +62,7 @@ public class GenerateChartTool implements AgentTool {
                     .orElseThrow(() -> new SecurityException("当前用户不能使用查询结果。"));
             var input = param.getInput();
             ChartSpec spec = new ChartSpec(string(input, "queryId"), string(input, "type"),
-                    string(input, "categoryColumn"), string(input, "valueColumn"), string(input, "title"));
+                    string(input, "categoryColumn"), string(input, "valueColumn"), string(input, "title"), string(input, "seriesColumn"));
             var result = queries.require(context.getUserId(), context.getSessionId(), spec.queryId());
             return Map.entry(spec, spec.option(result));
         }).subscribeOn(Schedulers.boundedElastic())

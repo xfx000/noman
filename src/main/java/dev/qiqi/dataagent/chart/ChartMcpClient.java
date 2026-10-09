@@ -45,7 +45,10 @@ public class ChartMcpClient {
                             return Mono.error(new IllegalStateException("图表 MCP 缺少 generate_echarts 工具，请使用 mcp-echarts 0.7.1。"));
                         return client.callTool("generate_echarts", Map.of("echartsOption", json,
                                         "width", 1000, "height", 600, "outputType", "png"))
-                                .map(result -> artifact(spec, result));
+                                .map(result -> {
+                                    var image = artifact(spec, result);
+                                    return new ChartArtifact(image.id(), image.queryId(), image.title(), image.type(), image.source(), option);
+                                });
                     })).timeout(properties.timeout()),
                     this::close);
         });
