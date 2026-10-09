@@ -313,4 +313,4 @@ Agent 自动评分和 BIRD 数据集评测暂不在当前范围；安全与功�
 
 同一 queryId 的分析图表、表格与概览合并在一张查询结果卡片中。分析图和自主探索均使用本地 ECharts、相同配色与布局，避免重复图表和两套视觉样式。自主探索提供分类、指标、系列、图型、显式聚合与排序，配置随当前分析历史保存；只消费已授权查询快照，截断结果明确标为预览，不改写 Agent 的分析结论或原始 PNG。探索图可另存 PNG。
 
-探索设计借鉴 [Graphic Walker](https://github.com/Kanaries/graphic-walker) 的维度/指标与配置思路，以 Noman 原生界面独立实现，未引入其 React UI 或复制源码。Evidence 报告发布方向见 [当前待办](docs/current-todos.md)。
+探索设计借鉴 [Graphic Walker](https://github.com/Kanaries/graphic-walker) 的维度/指标与配置思路，以 Noman 原生界面独立实现，未引入其 React UI 或复制源码。
